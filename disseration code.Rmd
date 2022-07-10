@@ -56,11 +56,12 @@ N <- census_data$`X13`[-c(21:51)]  # manipulate census dataset so that it is sim
 # R crashes when running code with all 48 spatial locations so consider subsetting regions into NE, MW, S and W to reduce dimensions of matrices
 data("usaww")
 spatial_data <- usaww
-spatial_data <- spatial_data[1:20,1:20]
+
 
 #spatial_data[spatial_data > 0] <- 1
 
 ```
+
 
 ```{r}
 
@@ -73,49 +74,19 @@ states_new_cases <- states_new_cases %>%
 
 
 ```{r}
-
-option_list <- list(
-make_option(c("-s", "--state"), type = "character", 
-            default = "16", help = "State to Analyze - index",
-            metavar="character"),
-make_option(c("-m", "--template"), type = "character", 
-            default = "default.template.mortality.R", help = "Analysis Template File",
-            metavar="character"),
-make_option(c("-d", "--date"), type = "character", 
-            default = "2020-03-01", help = "Intervention Date (change from unchecked spread)",
-            metavar="character"),
-make_option(c("-r", "--reopen"), type = "character", 
-            default = "2020-05-01", help = "Reopen Date (or closest thing thereto)",
-            metavar="character"),
-make_option(c("-t", "--type"), type = "character", 
-            default = "3", help = "Intervention Type (1/2/3)",
-            metavar="character"),
-make_option(c("-b", "--isdebug"), type = "character", 
-            default = "0", help = "Debug?",
-            metavar="character"),
-make_option(c("-o", "--outfile"), type = "character", 
-            default = "tmp.rda", help = "output file",
-            metavar="character"),
-make_option(c("-z", "--cores"), type = "character", 
-            default = "8", help = "cores",
-            metavar="character"))
-
-opt_parser <- OptionParser(option_list = option_list)
-opt = parse_args(opt_parser)
-
-uqStates <- sort(unique(intersect(gsub(".", "", census_data$X1, fixed = TRUE), states$state)))
-instate <- uqStates[as.numeric(opt$state)]
-stateCenIdx <- which(gsub(".", "", census_data$X1, fixed = TRUE) == instate)
-```
-
-
-```{r}
-confirmed_cases <- states_new_cases[-c(22:50)] %>% select(., -c('date'))
+confirmed_cases <- states_new_cases[-c(50)] %>% select(., -c('date'))
 epidemic.start = min(which(apply(confirmed_cases, 1, max) > 0)) # starts in week 1 or epoch week 3
 confirmed_cases = confirmed_cases[(epidemic.start-1):nrow(confirmed_cases),]
+#confirmed_cases <- confirmed_cases %>%
+  #apply(., 2,cumsum)
 
 colnames(spatial_data) <- gsub('[[:punct:] ]+','',colnames(spatial_data))
 rownames(spatial_data) <- gsub('[[:punct:] ]+','',rownames(spatial_data))
+
+colnames(confirmed_cases) <- confirmed_cases %>%
+  colnames(.) %>% 
+  toupper() %>%
+  gsub(' ', '',.)
 
 census_data$X1 <- census_data$X1 %>% 
   toupper() %>% 
@@ -133,25 +104,34 @@ rownames(spatial_data)[which(rownames(spatial_data) == 'TENNESSE')] <- 'TENNESSE
 
 # checking that names in spatial matrix and population data match 
 
-test_census_names = census_data$`X1`[-c(21:51)] 
-if (!all(test_census_names == colnames(spatial_data))){
+#test_census_names = census_data$`X1`[-c(21:51)] 
+if (!all(census_data$`X1` == colnames(spatial_data))){
   stop("Error, make sure spatial unit ordering is consistent.")
 }
 
 ```
 
 ```{r}
-fl <- states %>%
-  filter(state == "Florida")
+# NE = Northeast .....as defined by United States Census Bureau
+
+NE <-c("CONNECTICUT","MAINE", "MASSACHUSETTS", "NEWHAMPSHIRE",
+       "NEWJERSEY", "NEWYORK", "RHODEISLAND", "PENNSYLVANIA",
+       "VERMONT") 
+
+# get confirmed cases, N and spatial data for this region
+
+confirmed_NE <- confirmed_cases[,NE]
+
+N_NE <- census_data[grepl(paste(NE, collapse="|"), census_data$X1),] %>% 
+  subset(., select = c("X13"))
+
+spatial_NE <- spatial_data[rownames(spatial_data)%in%NE,colnames(spatial_data)%in%NE]
+
+  
 ```
 
-```{r, echo=TRUE, eval=TRUE}
-
-barplot(t(fl$cases), main = "New Cases", xlab = "Day", ylab = "Cases")
-axis(side = 1, at = seq(0, nrow(states), 100)) 
 
 
-```
 ```{r data, echo=TRUE, eval=TRUE}
 
 #data_model_fl = DataModel(states$cases,
@@ -159,26 +139,28 @@ axis(side = 1, at = seq(0, nrow(states), 100))
                        # compartment="I_star",
                        # cumulative=FALSE)
 
-data_model = DataModel(Y=apply(confirmed_cases, 2,cumsum), 
+data_model = DataModel(Y=apply(confirmed_NE, 2,cumsum), 
                              type = "identity",      # Assume data is correct 
                              compartment = "I_star", # Data related to new infections
                              cumulative = TRUE       # Not reported on cumulative scale
                              )
+
+# FIX DATASET...NEGATIVE VALUES PRESENT
 ```
 
 ```{r exposure, echo=TRUE, eval=TRUE}
 
-n.locations <- ncol(spatial_data)
+n.locations <- ncol(spatial_NE)
 n.timepoints <- length(unique(states_new_cases$weeks))
 
-intercepts = diag(20)[rep(1:ncol(confirmed_cases), each = nrow(confirmed_cases)),]
+intercepts = diag(20)[rep(1:ncol(confirmed_NE), each = nrow(confirmed_NE)),]
 #intercepts = 1
-timeBasis = bs(1:nrow(confirmed_cases), degree = 3)[rep(1:nrow(confirmed_cases), ncol(confirmed_cases)),]
+timeBasis = bs(1:nrow(confirmed_NE), degree = 3)[rep(1:nrow(confirmed_NE), ncol(confirmed_NE)),]
 
 X = cbind(intercepts, timeBasis)
 
-exposure_model = ExposureModel(intercepts, nTpt = nrow(confirmed_cases),
-                               nLoc = ncol(confirmed_cases),
+exposure_model = ExposureModel(intercepts, nTpt = nrow(confirmed_NE),
+                               nLoc = ncol(confirmed_NE),
                                betaPriorPrecision = 0.5,
                                betaPriorMean = 0)
                                #betaPriorMean = c(rep(-1, ncol(intercepts)),
@@ -202,15 +184,19 @@ exposure_model = ExposureModel(intercepts, nTpt = nrow(confirmed_cases),
 ```
 
 ```{r}
-I0 = (apply(confirmed_cases[1:3,], 2, max) > 0)*2
-E0 = I0
-R0 = 0*I0
-S0 = N-E0-I0-R0
 
-initial_values = InitialValueContainer(S0 = S0, 
-                                             E0 = E0,
-                                             I0 = I0,
-                                             R0 = R0)
+epidemic.start_NE = min(which(apply(confirmed_NE, 1, max) > 0)) # starts in week 1 or epoch week 3
+confirmed_NE = confirmed_NE[(epidemic.start_NE-1):nrow(confirmed_NE),]
+
+I0_NE = (apply(confirmed_NE[1:3,], 2, max) > 0)*2
+E0_NE = I0_NE
+R0_NE = 0*I0_NE
+S0_NE = as.numeric(unlist(N_NE-E0_NE-I0_NE-R0_NE))
+
+initial_values = InitialValueContainer(S0 = S0_NE, 
+                                             E0 = E0_NE,
+                                             I0 = I0_NE,
+                                             R0 = R0_NE)
 ```
 
 ```{r reinfection, echo=TRUE, eval=TRUE}
@@ -223,14 +209,16 @@ reinfection_model = ReinfectionModel("SEIR") # without reinfection rate
 ```{r distance, echo=TRUE, eval=TRUE}
 
 #distance_model = DistanceModel(list(matrix(0))) # considering as one state therefore initialising with empty matrix
-
-CAR_model <- DistanceModel(list((spatial_data == 1)*1), 
+spatial_NE <- ( spatial_NE == 1)*1
+CAR_model <- DistanceModel(list(spatial_NE), 
                                  priorAlpha = 1,
                                  priorBeta = 1
                                  )
 
 # figure out how to incorporate distance if considering analysis of several countries...
 # https://github.com/grantbrown/ABSEIR/issues/1
+
+# FIX SO THAT 1S PRESENT FOR BORDERS AND NOT WEIGHTED DISTANCE
 
 ```
 
@@ -319,9 +307,96 @@ summary(result_fl)
 # works fine with 20 locations....crashes with full 48 states
 
 ```
+
+```{r}
+makePlots <- function(modelObj, nm){
+  sims <- epidemic.simulations(modelObj, replicates = 25)
+  Is <- lapply(sims$simulationResults, function(x){x$I_star})
+  Is <- array(Reduce(c, Is), dim = c(nrow(Is[[1]]),
+                                           ncol(Is[[2]]),
+                                           length(Is)))
+  
+  Ism <- apply(Is, 1:2, mean)
+  Islb <- apply(Is, 1:2, quantile, probs = c(0.025))
+  Isub <- apply(Is, 1:2, quantile, probs = c(0.975))
+  
+  plotLocation <- function(x, model){
+    plot(confirmed_NE[,x], ylim = c(0, max(Isub[,x])),
+         main = paste(model, ": Observed and Posterior Predictive Simulation.\n location ", 
+                      colnames(spatial_NE)[x], sep = ""))
+    lines(Ism[,x], col = rgb(0,0,0,0.8), lwd = 2)
+    lines(Islb[,x], col = rgb(0,0,0.5,0.8), lwd = 1, lty = 2)
+    lines(Isub[,x], col = rgb(0,0,0.5,0.8), lwd = 1, lty = 2)
+    #apply(Is, 3, function(i){
+    #  lines(i[,x], col = rgb(0,0,0,0.1))
+    #})
+    points(confirmed_NE[,x], pch = 16, col = "blue")
+  }
+  
+  for (i in 1:ncol(spatial_NE)){
+    plotLocation(i, nm)
+  }
+}
+```
+
+```{r}
+makePlots(result_fl, "Dist")
+
+```
+
+```{r}
+fl <- states %>%
+  filter(state == "Florida")
+```
+
+```{r, echo=TRUE, eval=TRUE}
+
+barplot(t(fl$cases), main = "New Cases", xlab = "Day", ylab = "Cases")
+axis(side = 1, at = seq(0, nrow(states), 100)) 
+
+
+
+```
+
+```{r}
+
+option_list <- list(
+make_option(c("-s", "--state"), type = "character", 
+            default = "16", help = "State to Analyze - index",
+            metavar="character"),
+make_option(c("-m", "--template"), type = "character", 
+            default = "default.template.mortality.R", help = "Analysis Template File",
+            metavar="character"),
+make_option(c("-d", "--date"), type = "character", 
+            default = "2020-03-01", help = "Intervention Date (change from unchecked spread)",
+            metavar="character"),
+make_option(c("-r", "--reopen"), type = "character", 
+            default = "2020-05-01", help = "Reopen Date (or closest thing thereto)",
+            metavar="character"),
+make_option(c("-t", "--type"), type = "character", 
+            default = "3", help = "Intervention Type (1/2/3)",
+            metavar="character"),
+make_option(c("-b", "--isdebug"), type = "character", 
+            default = "0", help = "Debug?",
+            metavar="character"),
+make_option(c("-o", "--outfile"), type = "character", 
+            default = "tmp.rda", help = "output file",
+            metavar="character"),
+make_option(c("-z", "--cores"), type = "character", 
+            default = "8", help = "cores",
+            metavar="character"))
+
+opt_parser <- OptionParser(option_list = option_list)
+opt = parse_args(opt_parser)
+
+uqStates <- sort(unique(intersect(gsub(".", "", census_data$X1, fixed = TRUE), states$state)))
+instate <- uqStates[as.numeric(opt$state)]
+stateCenIdx <- which(gsub(".", "", census_data$X1, fixed = TRUE) == instate)
+```
+
 ```{r sims, echo=TRUE, eval=TRUE}
 
-simulations_fl <- epidemic.simulations(result_fl, replicates = 50)
+simulations_fl <- epidemic.simulations(result_fl, replicates = 10)
 
 # this crashes with 20 locations...assuming it is due to the amount of timepoints and parameters
 
@@ -353,4 +428,3 @@ plotPosteriorPredictive = function(simulations, main)
 plotPosteriorPredictive(simulations_fl, "Model 1: Posterior Predictive Distribution")
 plotPosteriorPredictive(result_fl, "Model 1: Posterior Distribution")
 ```
-
