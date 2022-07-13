@@ -1,0 +1,343 @@
+---
+title: "dissertation code"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE}
+library(tidyverse)
+library(ABSEIR)
+library(splm)
+library(openxlsx)
+library(optparse)
+library(reshape2)
+library(lubridate)
+library(splines)
+```
+
+```{r}
+states <- read.csv("https://raw.githubusercontent.com/nytimes/covid-19-data/master/rolling-averages/us-states.csv", header = TRUE, sep = ",")
+
+# reordering and manipulating current dataframe so that states appear both alphabetically and as column headers according to date...data corresponds only to new cases per day
+
+# also replace NA values with zeroes
+
+states <- states[order(states$state),]
+states <- select(states, -c(2,5:9))
+
+jhu <- read.csv("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_US.csv", header = TRUE, sep = ",")
+
+census_data <- read.xlsx("nst-est2019-01.xlsx", startRow = 10, colNames = FALSE)
+
+# removing alaska, district of columbia, hawaii and puerto rico (along with other irrelevant rows at bottom of original spreadsheet) since not in usaww spatial matrix
+
+rows_to_remove<-c("2","9","12", "52", "53", "54", "55","56", "57") 
+census_data <- census_data[!(row.names(census_data) %in% rows_to_remove),]
+
+# also remove rows in states dataset which are not present in usaww matrix
+
+states <- states %>%
+  filter(!state %in% c('Alaska', "American Samoa", "District of Columbia", "Guam", 'Hawaii', "Northern Mariana Islands", "Puerto Rico", "Virgin Islands"))
+
+states_new_cases <- spread(states, state, cases)
+states_new_cases <- states_new_cases %>%
+  mutate_all(~replace(., is.na(.), 0))
+
+# n_distinct(states$state) ..... checking that there are 48 unique state entries
+
+N <- census_data$`X13`[-c(21:51)]  # manipulate census dataset so that it is similar to usaww matrix...X13 corresponds to 2019 data
+```
+
+```{r}
+
+# R crashes when running code with all 48 spatial locations so consider subsetting regions into NE, MW, S and W to reduce dimensions of matrices
+data("usaww")
+spatial_data <- ( usaww > 0)*1
+
+
+#spatial_data[spatial_data > 0] <- 1
+
+```
+
+
+```{r}
+
+# adding weeks from date of first recorded cases
+
+states_new_cases <- states_new_cases %>%
+  mutate(weeks = as.numeric(floor(difftime(states_new_cases$date, as.Date("2020-01-21"), units="weeks")+1)))
+
+```
+
+
+```{r}
+confirmed_cases <- states_new_cases[-c(50)] %>% select(., -c('date'))
+epidemic.start = min(which(apply(confirmed_cases, 1, max) > 0)) # starts in week 1 or epoch week 3
+confirmed_cases = confirmed_cases[(epidemic.start-1):nrow(confirmed_cases),]
+#confirmed_cases <- confirmed_cases %>%
+  #apply(., 2,cumsum)
+
+colnames(spatial_data) <- gsub('[[:punct:] ]+','',colnames(spatial_data))
+rownames(spatial_data) <- gsub('[[:punct:] ]+','',rownames(spatial_data))
+
+colnames(confirmed_cases) <- confirmed_cases %>%
+  colnames(.) %>% 
+  toupper() %>%
+  gsub(' ', '',.)
+
+census_data$X1 <- census_data$X1 %>% 
+  toupper() %>% 
+  sub("\\.", "",.) %>% 
+  gsub(' ', '',.)
+
+# in spatial data matrix tennessee is spelled as tennesse so for uniformity we change to match the correct spelling
+
+colnames(spatial_data)[which(colnames(spatial_data) == 'TENNESSE')] <- 'TENNESSEE'
+rownames(spatial_data)[which(rownames(spatial_data) == 'TENNESSE')] <- 'TENNESSEE'
+
+```
+
+```{r}
+
+# checking that names in spatial matrix and population data match 
+
+#test_census_names = census_data$`X1`[-c(21:51)] 
+if (!all(census_data$`X1` == colnames(spatial_data))){
+  stop("Error, make sure spatial unit ordering is consistent.")
+}
+
+```
+
+```{r}
+# MW = Midwest .....as defined by United States Census Bureau
+
+# since kansas is considered a 'subset' of the string arkansas.....use word boundary \\b to differentiate between two words
+
+MW <-c("ILLINOIS","INDIANA", "IOWA", "\\bKANSAS\\b",
+       "MICHIGAN", "MINNESOTA", "MISSOURI", "OHIO",
+       "NEBRASKA", "NORTHDAKOTA", "SOUTHDAKOTA", "WISCONSIN") 
+
+# get confirmed cases, N and spatial data for this region
+
+N_MW <- census_data[grepl(paste(MW, collapse="|"), census_data$X1),] %>% 
+  subset(., select = c("X13"))
+
+MW[[4]] <- "KANSAS"
+
+
+confirmed_MW <- confirmed_cases[,MW]
+
+
+spatial_MW <- spatial_data[rownames(spatial_data)%in%MW,colnames(spatial_data)%in%MW]
+
+  
+```
+
+```{r data, echo=TRUE, eval=TRUE}
+
+#data_model_fl = DataModel(states$cases,
+                       # type = "identity",
+                       # compartment="I_star",
+                       # cumulative=FALSE)
+
+data_model_MW = DataModel(Y=apply(confirmed_MW, 2,cumsum), 
+                             type = "identity",      # Assume data is correct 
+                             compartment = "I_star", # Data related to new infections
+                             cumulative = TRUE       # Not reported on cumulative scale
+                             )
+
+# FIX DATASET...NEGATIVE VALUES PRESENT
+```
+
+```{r exposure, echo=TRUE, eval=TRUE}
+
+MW.locations <- ncol(spatial_MW)
+MW.timepoints <- length(unique(states_new_cases$weeks))
+
+intercepts_MW = diag(12)[rep(1:ncol(confirmed_MW), each = nrow(confirmed_MW)),]
+#intercepts = 1
+timeBasis_MW = bs(1:nrow(confirmed_MW), degree = 3)[rep(1:nrow(confirmed_MW), ncol(confirmed_MW)),]
+
+X = cbind(intercepts_MW , timeBasis_MW)
+
+exposure_model_MW = ExposureModel(X, nTpt = nrow(confirmed_MW),
+                               nLoc = ncol(confirmed_MW),
+                               betaPriorPrecision = 0.5,
+                               betaPriorMean = c(rep(-1, ncol(intercepts_MW)),
+                                                 rep(0, ncol(timeBasis_MW))))
+
+#exposure_model = ExposureModel(matrix(1,nrow = nrow((confirmed_cases))),
+ #                                 nTpt = nrow((confirmed_cases)),
+ #                                 nLoc = n.locations,
+ #                                 betaPriorPrecision = 0.5,
+  #                                betaPriorMean = 0)
+
+#
+
+#intervention_term_fl = cumsum(fl$date >  as.Date("2020-03-22", "%Y-%m-%d")) # date when lockdown was first imposed
+
+#exposure_model_fl_inter = ExposureModel(cbind(1,intervention_term_fl),
+#                                  nTpt = nrow(fl),
+#                                  nLoc = 1,
+#                                  betaPriorPrecision = 0.5,
+ #                                 betaPriorMean = 0)
+```
+
+```{r}
+
+epidemic.start_MW = min(which(apply(confirmed_MW, 1, max) > 0)) # starts in week 1 or epoch week 3
+confirmed_MW = confirmed_MW[(epidemic.start_MW-1):nrow(confirmed_MW),]
+
+I0_MW = (apply(confirmed_MW[1:3,], 2, max) > 0)*2
+E0_MW = I0_MW
+R0_MW = 0*I0_MW
+S0_MW = as.numeric(unlist(N_MW-E0_MW-I0_MW-R0_MW))
+
+initial_values_MW = InitialValueContainer(S0 = S0_MW, 
+                                             E0 = E0_MW,
+                                             I0 = I0_MW,
+                                             R0 = R0_MW)
+```
+
+```{r reinfection, echo=TRUE, eval=TRUE}
+
+reinfection_model = ReinfectionModel("SEIR") # without reinfection rate
+
+```
+
+
+```{r distance, echo=TRUE, eval=TRUE}
+
+#distance_model = DistanceModel(list(matrix(0))) # considering as one state therefore initialising with empty matrix
+#spatial_MW <- ( spatial_MW == 1)*1
+CAR_model_MW <- DistanceModel(list(spatial_MW), 
+                                 priorAlpha = 1,
+                                 priorBeta = 1
+                                 )
+
+# figure out how to incorporate distance if considering analysis of several countries...
+# https://github.com/grantbrown/ABSEIR/issues/1
+
+# FIX SO THAT 1S PRESENT FOR BORDERS AND NOT WEIGHTED DISTANCE
+
+```
+
+```{r}
+
+# Model to describe E to I and I to R transition probabilities.
+
+# Latent period: 2-14 days with median 5
+
+# find proper reference supporting this info  ^^
+
+pickWeibullPars <- function(qdf){
+  rslt <- optim(par = c(1,1), fn = function(par){
+    sum((qweibull(p = qdf$q, shape = par[1], scale = par[2]) - qdf$x)^2)
+  })
+  rslt$par
+}
+
+pickGammaHyperPars <- function(mean, ESS){
+  b <- ESS/(mean+1)     # ESS = effective sample size
+  a <- ESS - b          # b = event occur rate and a = number of events occurred
+  c(a,b)
+}
+
+latent_par_means <- pickWeibullPars(qdf=data.frame(q=c(0.025,0.5,0.975),
+                                                   x=c(2,5,14)))
+infectious_par_means <- pickWeibullPars(qdf = data.frame(q=c(0.025,0.5,0.975),
+                                                         x = c(10,14,32)))
+
+weibull_transition_priors <- WeibullTransitionPriors(latent_shape_prior_alpha = pickGammaHyperPars(latent_par_means[1], 1000)[1],
+                                            latent_shape_prior_beta = pickGammaHyperPars(latent_par_means[1], 1000)[2],
+                                            latent_scale_prior_alpha = pickGammaHyperPars(latent_par_means[2], 1000)[1],
+                                            latent_scale_prior_beta = pickGammaHyperPars(latent_par_means[2], 1000)[2],
+                                            infectious_shape_prior_alpha = pickGammaHyperPars(infectious_par_means[1], 100)[1], #less certain about infectious period...in other words we have a larger range in which one can be infectious when compared to small latent period range so we use a smaller ESS
+                                            infectious_shape_prior_beta = pickGammaHyperPars(infectious_par_means[1], 100)[2],
+                                            infectious_scale_prior_alpha = pickGammaHyperPars(infectious_par_means[2], 100)[1],
+                                            infectious_scale_prior_beta = pickGammaHyperPars(infectious_par_means[2], 100)[2])
+```
+
+```{r sampling control, echo=TRUE, eval=TRUE}
+
+sampling_control = SamplingControl(seed = 123123, 
+                                    n_cores = 8,
+                                    algorithm="Beaumont2009",
+                                    list(batch_size = 1000,
+                                         epochs = 1e6,
+                                         max_batches = 200,
+                                         shrinkage = 0.99,
+                                         multivariate_perturbation=FALSE,
+                                         keep_compartments = TRUE
+                                    )
+ )
+# algorithm="Beaumont2009" for SMC-ABC
+
+```
+
+```{r runtime and summary, echo=TRUE, eval=TRUE}
+
+#consider showing difference of weibull transition priors vs exponential transition priors
+
+runtime_MW = system.time(result_MW <- SpatialSEIRModel(data_model_MW,
+                                                    exposure_model_MW,
+                                                    reinfection_model,
+                                                    CAR_model_MW ,
+                                                   weibull_transition_priors,
+                                                    #exp_transition_priors,
+                                                    initial_values_MW,
+                                                    sampling_control,
+                                                    samples = 100,
+                                                    verbose = 0))
+runtime_MW
+
+summary(result_MW)
+
+# Interpretation of Beta_SE coefficients: https://github.com/grantbrown/ABSEIR/issues/17
+
+# works fine with 20 locations....crashes with full 48 states
+
+```
+
+```{r}
+makePlots_MW <- function(modelObj, nm){
+  sims <- epidemic.simulations(modelObj, replicates = 25)
+  Is <- lapply(sims$simulationResults, function(x){x$I_star})
+  Is <- array(Reduce(c, Is), dim = c(nrow(Is[[1]]),
+                                           ncol(Is[[2]]),
+                                           length(Is)))
+  
+  Ism <- apply(Is, 1:2, mean)
+  Islb <- apply(Is, 1:2, quantile, probs = c(0.025))
+  Isub <- apply(Is, 1:2, quantile, probs = c(0.975))
+  
+  plotLocation <- function(x, model){
+    plot(confirmed_MW[,x], ylim = c(0, max(Isub[,x])),
+         main = paste(model, ": Observed and Posterior Predictive Simulation.\n location ", 
+                      colnames(spatial_MW)[x], sep = ""))
+    lines(Ism[,x], col = rgb(0,0,0,0.8), lwd = 2)
+    lines(Islb[,x], col = rgb(0,0,0.5,0.8), lwd = 1, lty = 2)
+    lines(Isub[,x], col = rgb(0,0,0.5,0.8), lwd = 1, lty = 2)
+    #apply(Is, 3, function(i){
+    #  lines(i[,x], col = rgb(0,0,0,0.1))
+    #})
+    points(confirmed_MW[,x], pch = 16, col = "blue")
+  }
+  
+  for (i in 1:ncol(spatial_MW)){
+    plotLocation(i, nm)
+  }
+}
+```
+
+```{r}
+runtime_MW_plots = system.time(MW_plots <- makePlots_MW(result_MW, "Dist"))
+
+runtime_MW_plots
+
+MW_plots
+
+```
