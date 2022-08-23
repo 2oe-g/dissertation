@@ -1,0 +1,1246 @@
+---
+title: "dissertation code"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+# Vignettes used from here: http://grantbrown.github.io/ABSEIR/vignettes/Introduction.html
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE}
+
+# load necessary packages
+
+library(tidyverse)
+library(ABSEIR)
+library(splm)
+library(openxlsx)
+library(optparse)
+library(reshape2)
+library(lubridate)
+library(splines)
+library(zoo)
+library(imputeTS)
+library(plyr)
+library(SciViews)
+library(forestmangr) # devtools::install_github("sollano/forestmangr")
+
+```
+
+```{r}
+# read in data
+states <- read.csv("https://raw.githubusercontent.com/nytimes/covid-19-data/master/rolling-averages/us-states.csv", 
+                   header = TRUE, 
+                   sep = ",")
+
+vaccinations <- read.csv("https://raw.githubusercontent.com/owid/covid-19-data/master/public/data/vaccinations/us_state_vaccinations.csv", 
+                         header = TRUE, 
+                         sep = ",")
+
+census_data <- read.xlsx("https://www2.census.gov/programs-surveys/popest/tables/2010-2019/state/totals/nst-est2019-01.xlsx", 
+                         startRow = 10, 
+                         colNames = FALSE)
+```
+
+```{r}
+
+# reordering and manipulating current dataframe so that states appear both alphabetically and as column headers according to date...data corresponds only to new cases per day
+
+states <- states[order(states$state),]
+states <- select(states, -c(2,5:9))
+
+# removing alaska, district of columbia, hawaii and puerto rico (along with other irrelevant rows at bottom of original spreadsheet) since not in usaww spatial matrix
+
+rows_to_remove<-c("2","9","12", "52", "53", "54", "55","56", "57") 
+census_data <- census_data[!(row.names(census_data) %in% rows_to_remove),]
+
+N <- census_data$`X13`  # manipulate census dataset so that it is similar to usaww matrix...X13 corresponds to 2019 data
+
+
+# also remove rows in states and vaccines dataset which are not present in usaww matrix
+
+states <- states %>%
+  filter(!state %in% c('Alaska', "American Samoa", "District of Columbia", "Guam", 'Hawaii', "Northern Mariana Islands", "Puerto Rico", "Virgin Islands"))
+
+vaccinations <- vaccinations %>% 
+  filter(!location %in% c('Alaska', "American Samoa", "Bureau of Prisons", "Dept of Defense","District of Columbia", "Federated States of Micronesia", "Indian Health Svc", "Long Term Care","Marshall Islands","Guam", 'Hawaii', "Northern Mariana Islands", "Puerto Rico", "Republic of Palau", "United States","Veterans Health" , "Virgin Islands"))
+
+states_new_cases <- spread(states, state, cases)
+states_new_cases <- states_new_cases %>%
+  mutate_all(~replace(., is.na(.), 0)) # also replace NA values with zeroes
+
+# n_distinct(states$state) ..... checking that there are 48 unique state entries
+```
+
+```{r}
+
+# for reference 
+total_cases_by_state <- aggregate(states$cases, by=list(state=states$state), FUN=sum)
+
+
+total_cases_by_state$pop <- N
+total_cases_by_state$total_cases_per_100k <- total_cases_by_state$x/total_cases_by_state$pop * 1e5
+```
+
+
+```{r}
+
+# get vaccine data
+
+fully_vaxxed <- vaccinations %>%
+  select(date, location, people_fully_vaccinated) 
+fully_vaxxed <- spread(fully_vaxxed, location, people_fully_vaccinated)
+
+vaxxed <- vaccinations %>%
+  select(date, location, people_vaccinated) 
+vaxxed <- spread(vaxxed, location, people_vaccinated)
+
+boosted <- vaccinations %>%
+  select(date, location, total_boosters) 
+boosted <- spread(boosted, location, total_boosters)
+
+```
+
+
+```{r}
+
+# R crashes when running code with all 48 spatial locations so consider subsetting regions into NE, MW, S and W to reduce dimensions of matrices (original idea)
+
+data("usaww")
+spatial_data <- ( usaww > 0)*1
+
+
+```
+
+
+```{r}
+
+# adding weeks from date of first recorded cases
+
+states_new_cases <- states_new_cases %>%
+  mutate(weeks = as.numeric(floor(difftime(states_new_cases$date, as.Date("2020-01-21"), units="weeks")+1)))
+
+weeks <- unique(states_new_cases$weeks)
+
+```
+
+```{r}
+
+# for future use
+
+first_wave = as.Date("2020-09-30", "%Y-%m-%d")
+
+second_wave_start = as.Date("2020-03-31", "%Y-%m-%d")
+second_wave_end = as.Date("2021-10-31", "%Y-%m-%d")
+
+firstandsecond_wave = as.Date("2021-06-30", "%Y-%m-%d")
+
+third_wave = as.Date("2021-08-31", "%Y-%m-%d")
+
+```
+
+
+
+```{r}
+
+confirmed_cases <- states_new_cases[-c(50)] %>% select(., -c('date')) 
+epidemic.start = min(which(apply(confirmed_cases, 1, max) > 0)) # starts in week 1 or epoch week 3
+confirmed_cases = confirmed_cases[(epidemic.start-1):nrow(confirmed_cases),]
+
+# below for original idea but not really needed in scaled analysis
+
+colnames(spatial_data) <- gsub('[[:punct:] ]+','',colnames(spatial_data))
+rownames(spatial_data) <- gsub('[[:punct:] ]+','',rownames(spatial_data))
+
+colnames(confirmed_cases) <- confirmed_cases %>%
+  colnames(.) %>% 
+  toupper() %>%
+  gsub(' ', '',.)
+
+colnames(fully_vaxxed) <- fully_vaxxed %>%
+  colnames(.) %>% 
+  toupper() %>%
+  gsub(' ', '',.)
+
+colnames(vaxxed) <- vaxxed %>%
+  colnames(.) %>% 
+  toupper() %>%
+  gsub(' ', '',.)
+
+colnames(boosted) <- boosted %>%
+  colnames(.) %>% 
+  toupper() %>%
+  gsub(' ', '',.)
+
+
+census_data$X1 <- census_data$X1 %>% 
+  toupper() %>% 
+  sub("\\.", "",.) %>% 
+  gsub(' ', '',.)
+
+# in spatial data matrix tennessee is spelled as tennesse so for uniformity we change to match the correct spelling
+
+colnames(spatial_data)[which(colnames(spatial_data) == 'TENNESSE')] <- 'TENNESSEE'
+rownames(spatial_data)[which(rownames(spatial_data) == 'TENNESSE')] <- 'TENNESSEE'
+
+```
+
+```{r}
+
+# checking that names in spatial matrix and population data match 
+
+
+if (!all(census_data$`X1` == colnames(spatial_data))){
+  stop("Error, make sure spatial unit ordering is consistent.")
+}
+
+```
+
+```{r}
+
+sub <-c("ALABAMA", "FLORIDA", "GEORGIA") 
+
+# get confirmed cases, N and spatial data for this region
+
+confirmed_sub <- confirmed_cases[,sub] 
+epidemic.start_sub = min(which(apply(confirmed_sub, 1, max) > 0)) # starts in week 1 or epoch week 3
+confirmed_sub = confirmed_sub[(epidemic.start_sub):nrow(confirmed_sub),]
+
+
+
+confirmed_sub_with_date <- confirmed_sub %>%
+  add_column(date = seq.Date(from = as.Date(states_new_cases$date[epidemic.start_sub], "%Y-%m-%d"), length.out = dim(confirmed_sub)[1], by="day"))  # add date for future use
+
+
+N <- census_data[grepl(paste(sub, collapse="|"), census_data$X1),] %>% 
+  subset(., select = c("X13"))  # get pop values
+
+spatial_sub <- spatial_data[rownames(spatial_data)%in%sub,colnames(spatial_data)%in%sub] # spatial data
+
+alabama_vaxx_info_with_date <- fully_vaxxed %>%
+  select( "DATE","ALABAMA") %>%
+  dplyr::rename(fully_vaxxed=ALABAMA) %>%
+  mutate(vaxxed = vaxxed[,"ALABAMA"],
+         boosted = boosted[,"ALABAMA"]) # create df with vaccine info 
+
+latest_date_al= tail(na.omit(alabama_vaxx_info_with_date$DATE),1)
+
+alabama_vaxx_info <-na.approx(alabama_vaxx_info_with_date[,-1]) %>% 
+  ceiling() %>%
+  replace(., is.na(.), 0) %>% as.data.frame()
+vaccinations_alabama <- cbind(alabama_vaxx_info, date =  as.Date(alabama_vaxx_info_with_date$DATE, "%Y-%m-%d")) 
+vaccinations_alabama <-left_join(confirmed_sub_with_date[,c("date","ALABAMA")], vaccinations_alabama, by='date') %>%
+  filter(date<=latest_date_al) %>% # filtering to date with latest vaccine info
+     replace(., is.na(.), 0)  
+# making df with vaccine and case info; filling in with zeroes as vaccine distribution started later on in pandemic
+
+fl_vaxx_info_with_date <- fully_vaxxed %>%
+  select( "DATE","FLORIDA") %>%
+  dplyr::rename(., fully_vaxxed=FLORIDA) %>%
+  mutate(vaxxed = vaxxed[,"FLORIDA"],
+         boosted = boosted[,"FLORIDA"])
+
+latest_date_fl= tail(na.omit(fl_vaxx_info_with_date$DATE),1)
+
+fl_vaxx_info <-na.approx(fl_vaxx_info_with_date[,-1]) %>% 
+  ceiling() %>%
+  replace(., is.na(.), 0) %>% as.data.frame()
+vaccinations_florida <- cbind(fl_vaxx_info, date = as.Date(fl_vaxx_info_with_date$DATE, "%Y-%m-%d"))
+vaccinations_florida <-left_join(confirmed_sub_with_date[,c("date","FLORIDA")], vaccinations_florida, by='date') %>%
+  filter(date<=latest_date_fl) %>% # filtering to date with latest vaccine info
+     replace(., is.na(.), 0) 
+
+georgia_vaxx_info_with_date <- fully_vaxxed %>%
+  select( "DATE","GEORGIA") %>%
+  dplyr::rename(., fully_vaxxed=GEORGIA) %>%
+  mutate(vaxxed = vaxxed[,"GEORGIA"],
+         boosted = boosted[,"GEORGIA"])
+
+latest_date_georgia = tail(na.omit(georgia_vaxx_info_with_date$DATE),1)
+
+georgia_vaxx_info <-na.approx(georgia_vaxx_info_with_date[,-1]) %>% 
+  ceiling() %>%
+  replace(., is.na(.), 0) %>% as.data.frame()
+vaccinations_georgia <- cbind(georgia_vaxx_info, date = as.Date(georgia_vaxx_info_with_date$DATE, "%Y-%m-%d"))
+vaccinations_georgia <-left_join(confirmed_sub_with_date[,c("date","GEORGIA")], vaccinations_georgia, by='date') %>%
+  filter(date<=latest_date_georgia) %>% # filtering to date with latest vaccine info
+     replace(., is.na(.), 0) 
+
+confirmed_sub[confirmed_sub == 0] <- NA
+confirmed_sub[confirmed_sub < 0] <- NA
+confirmed_sub<-na.trim(confirmed_sub, "right", is.na = "any") # trim latest rows with null values so can use na.approx
+confirmed_sub<-na.approx(confirmed_sub) %>% ceiling() # fills in zeroes and negative values with average of two closest values
+confirmed_sub <- replace(confirmed_sub, is.na(confirmed_sub), 0)  
+
+vaccinations_alabama[vaccinations_alabama == 0] <- NA
+vaccinations_alabama[vaccinations_alabama < 0] <- NA
+vaccinations_alabama<-na.trim(vaccinations_alabama, "right", is.na = "any") # trim latest rows with null values so can use na.approx
+vaccinations_alabama$ALABAMA[-c(1:length(which(is.na(vaccinations_alabama[1:epidemic.start_sub,"ALABAMA"]))))]<-
+     na.approx(vaccinations_alabama$ALABAMA) %>%
+     ceiling() # fills in zeroes and negative values with average of two closest values
+vaccinations_alabama <- replace(vaccinations_alabama, is.na(vaccinations_alabama), 0)  
+
+vaccinations_florida[vaccinations_florida == 0] <- NA
+vaccinations_florida[vaccinations_florida < 0] <- NA
+vaccinations_florida<-na.trim(vaccinations_florida, "right", is.na = "any") # trim latest rows with null values so can use na.approx
+vaccinations_florida$FLORIDA<-
+     na.approx(vaccinations_florida$FLORIDA) %>%
+     ceiling() 
+vaccinations_florida <- replace(vaccinations_florida, is.na(vaccinations_florida), 0)  
+
+vaccinations_georgia[vaccinations_georgia == 0] <- NA
+vaccinations_georgia[vaccinations_georgia < 0] <- NA
+vaccinations_georgia<-na.trim(vaccinations_georgia, "right", is.na = "any") # trim latest rows with null values so can use na.approx
+vaccinations_georgia$GEORGIA[-c(1:min(which(is.na(vaccinations_georgia[1:epidemic.start_sub,"GEORGIA"]))))]<-
+     na.approx(vaccinations_georgia$GEORGIA) %>%
+     ceiling() 
+vaccinations_georgia <- replace(vaccinations_georgia, is.na(vaccinations_georgia), 0) %>%
+  filter(date<=tail(na.omit(vaccinations_alabama$date, vaccinations_florida$date, .$date),1))
+
+vaccinations_florida <- vaccinations_florida %>%
+  filter(date<=tail(na.omit(vaccinations_alabama$date, .$date, vaccinations_georgia$date),1))
+vaccinations_alabama<- vaccinations_alabama %>%
+  filter(date<=tail(na.omit(.$date, vaccinations_florida$date, vaccinations_georgia$date),1))
+#ensures that dfs represent same timepoints
+
+confirmed_sub_with_date <- confirmed_sub_with_date[0:nrow(confirmed_sub),]
+```
+
+```{r}
+first_wave_timepoints <- confirmed_sub_with_date[-1,] %>%
+  filter(date <= "2020-09-30") %>% 
+  nrow()
+
+firstandsecond_wave_timepoints <- confirmed_sub_with_date[-1,] %>%
+  filter(date <= "2021-06-30") %>% 
+  nrow()
+
+
+first_wave_confirmed_sub <- confirmed_sub[1:first_wave_timepoints,] # create df with only cases for this timeline
+
+firstandsecond_wave_confirmed_sub <- confirmed_sub[1:firstandsecond_wave_timepoints,]
+firstandsecond_wave_confirmed_sub_with_date <- confirmed_sub_with_date[-1,] %>%
+  filter(date <= "2021-06-30")
+
+vaccines_timeline_sub <- cbind( 
+                               ALABAMA = vaccinations_alabama$ALABAMA, 
+                               FLORIDA = vaccinations_florida$FLORIDA, 
+                               GEORGIA = vaccinations_georgia$GEORGIA) %>%
+  as.data.frame()
+
+vaccines_dates <- vaccines_timeline_sub %>%
+    mutate(date=vaccinations_alabama$date) %>%
+  filter(date >= "2021-10-21" & date <="2022-03-01") # filter by this date as this is when boosters first administered and data becomes more sparse around this time (also marks two years since first case)
+```
+
+
+
+
+```{r data, echo=TRUE, eval=TRUE}
+
+data_model_1 = DataModel(Y=apply(first_wave_confirmed_sub, 2,cumsum), 
+                             type = "identity",      
+                             compartment = "I_star", 
+                             cumulative = TRUE       
+                             )
+
+data_model_2 = DataModel(Y=apply(firstandsecond_wave_confirmed_sub, 2,cumsum), 
+                             type = "identity",      
+                             compartment = "I_star", 
+                             cumulative = TRUE       
+                             )
+
+data_model_vaccines = DataModel(Y=apply(vaccines_dates[,-4], 2,cumsum), 
+                             type = "identity",      
+                             compartment = "I_star", 
+                             cumulative = TRUE       
+                             )
+
+# model 1 = first wave with intercepts and time basis (CAR (b) vs distance (a) vs gravity model (c))
+```
+
+```{r exposure, echo=TRUE, eval=TRUE}
+
+
+intercepts = diag(3)[rep(1:ncol(first_wave_confirmed_sub), each = nrow(first_wave_confirmed_sub)),]
+
+time_basis = bs(1:nrow(first_wave_confirmed_sub), degree = 6)[rep(1:nrow(first_wave_confirmed_sub), ncol(first_wave_confirmed_sub)),] 
+
+X = cbind(intercepts, time_basis)
+
+
+exposure_model_1 = ExposureModel(X, 
+                                 nTpt = nrow(first_wave_confirmed_sub),
+                                 nLoc = ncol(first_wave_confirmed_sub),
+                                 betaPriorPrecision = 0.5,
+                                 betaPriorMean = c(rep(-1, ncol(intercepts)),
+                                                 rep(0, ncol(time_basis)))) 
+
+```
+
+
+```{r}
+
+
+I0 = (apply(first_wave_confirmed_sub[1:3,], 2, max) > 0)*2
+E0 = I0
+R0 = 0*I0
+S0 = as.numeric(unlist(N-E0-I0-R0))
+
+initial_values = InitialValueContainer(S0 = S0, 
+                                             E0 = E0,
+                                             I0 = I0,
+                                             R0 = R0)
+```
+
+```{r reinfection, echo=TRUE, eval=TRUE}
+
+reinfection_model = ReinfectionModel("SEIR") # without reinfection rate
+
+```
+
+
+```{r distance, echo=TRUE, eval=TRUE}
+
+CAR_model <- DistanceModel(list(spatial_sub), 
+                                 priorAlpha = 1,
+                                 priorBeta = 10
+                                 )
+
+distance_model = DistanceModel(list(
+  matrix(c(0,1,0,1,0,0,0,0,0), nrow = 3, byrow=3), # alabama and fl
+  matrix(c(0,0,1,0,0,0,1,0,0), nrow = 3, byrow=3), # alabama and georgia
+  matrix(c(0,0,0,0,0,1,0,1,0), nrow = 3, byrow=3)), # fl and georgia 
+priorAlpha = 1, priorBeta = 10)
+
+pop_matrix <- matrix(as.numeric(unlist(N)), nrow = nrow(N), ncol = nrow(N))
+weighted_distance <- usaww[rownames(usaww)%in%sub,colnames(usaww)%in%sub]
+gravity_model <- (pop_matrix * t(pop_matrix))/weighted_distance^2
+diag(gravity_model) <- 1
+max_row_sum <- max(apply(gravity_model,1,sum))
+gravity_model <- gravity_model/max_row_sum
+
+gravity_distance_model <- DistanceModel(list(gravity_model), 
+                                      priorAlpha = 1,
+                                      priorBeta = 10)
+
+```
+
+```{r}
+# reference: https://github.com/grantbrown/COVID19-US/blob/master/Templates/default.template.mortality.R
+
+
+
+
+# pick a Weibull distribution for the compartment membership time that most closely matches some reported values and use this to deduce mean latent and infectious period times
+# attach an effective sample size to this distribution using gamma hyperpriors (choose gamma distributions with the chosen mean(s) but with different variances/effective sample sizes)
+# this function maps the reported latent and infectious period times/ranges to selected quantiles of that compartment membership time
+
+
+pickWeibullPars <- function(qdf){
+  rslt <- optim(par = c(1,1), fn = function(par){
+    sum((qweibull(p = qdf$q, shape = par[1], scale = par[2]) - qdf$x)^2)
+  })
+  rslt$par
+}
+
+pickGammaHyperPars <- function(mean, ESS){
+  b <- ESS/(mean+1)     # ESS = effective sample size
+  a <- ESS - b          # b = event occur rate and a = number of events occurred
+  c(a,b)
+}
+# below values using researched studies
+latent_par_means <- pickWeibullPars(qdf=data.frame(q=c(0.025,0.5,0.975), #(95% CI) 
+                                                   x=c(2,5,12)))   
+# latent period: approximately 2-12 days with median 5 (mean ~ 6 days)
+infectious_par_means <- pickWeibullPars(qdf = data.frame(q=c(0.025,0.5,0.975),
+                                                         x = c(10,14,24))) 
+# infectious period: approximately 10-24 days with median 14 (mean ~ 18 days)
+
+weibull_transition_priors <- WeibullTransitionPriors(latent_shape_prior_alpha = pickGammaHyperPars(latent_par_means[1], 1000)[1],
+                                            latent_shape_prior_beta = pickGammaHyperPars(latent_par_means[1], 1000)[2],
+                                            latent_scale_prior_alpha = pickGammaHyperPars(latent_par_means[2], 1000)[1],
+                                            latent_scale_prior_beta = pickGammaHyperPars(latent_par_means[2], 1000)[2],
+#less certain about infectious period...in other words we have a larger range in which one can be infectious when compared to small latent period range so we use a smaller ESS
+                                            infectious_shape_prior_alpha = pickGammaHyperPars(infectious_par_means[1], 100)[1], 
+                                            infectious_shape_prior_beta = pickGammaHyperPars(infectious_par_means[1], 100)[2],
+                                            infectious_scale_prior_alpha = pickGammaHyperPars(infectious_par_means[2], 100)[1],
+                                            infectious_scale_prior_beta = pickGammaHyperPars(infectious_par_means[2], 100)[2])
+
+# hazard function/failure rates...estimated latent shape > 1 implies that failure rate (rate of transition from exposed to infectious) increases over time; same for infectious but transition from I to R
+# The scale parameter or spread, η, sometimes called the characteristic life, represents the typical TTF in Weibull analysis and is related to the mean-time-to-failure (MTTF). In Weibull analysis, η is defined as the time at which 63.2% of systems or components under analysis will have failed (Pasha et al., 2006).
+# and reliability function
+
+```
+
+
+
+```{r}
+exp_transition_priors = ExponentialTransitionPriors(p_ei = 1-exp(-1/6),
+                                                      
+                                                      #1-exp(-1.67), #0.81,
+                                                    #average 5.68 day incubation period...(1/7)*5.68 approx 0.81 percent chance of 
+                                                    #transitioning to infectious in a week
+                                     p_ir= 1-exp(-1/18), 
+                                     p_ei_ess = 1000,
+                                     p_ir_ess = 100)
+```
+
+```{r sampling control, echo=TRUE, eval=TRUE}
+
+sampling_control_SMC = SamplingControl(seed = 123123, 
+                                    n_cores = 8,
+                                    algorithm="Beaumont2009",
+                                   list(batch_size = 2000,
+                                         init_batch_size = 1000000,
+                                         epochs = 1e6,
+                                         max_batches = 100,
+                                         shrinkage = 0.99, #0.85,
+                                         multivariate_perturbation=FALSE,
+                                         keep_compartments = TRUE
+                                    )
+ )
+
+sampling_control_basic = SamplingControl(seed = 123123, 
+                                    n_cores = 8,
+                                    algorithm="BasicABC",
+                                   list(batch_size = 2000,
+                                         epochs = 1e6,
+                                         max_batches = 100,
+                                         shrinkage = 0.99,
+                                         multivariate_perturbation=FALSE,
+                                         keep_compartments = TRUE
+                                    )
+ )
+
+```
+
+```{r runtime and summary, echo=TRUE, eval=TRUE}
+
+#consider showing difference of weibull transition priors vs exponential transition priors
+
+runtime1a = system.time(result1a <- SpatialSEIRModel(data_model_1,
+                                                    exposure_model_1,
+                                                    reinfection_model,
+                                                    distance_model,
+                                                   #weibull_transition_priors,
+                                                    exp_transition_priors,
+                                                    initial_values,
+                                                    sampling_control_SMC,
+                                                    samples = 20,
+                                                    verbose = 2)) 
+
+runtime1b = system.time(result1b <- SpatialSEIRModel(data_model_1,
+                                                    exposure_model_1,
+                                                    reinfection_model,
+                                                    CAR_model,
+                                                   #weibull_transition_priors,
+                                                    exp_transition_priors,
+                                                    initial_values,
+                                                    sampling_control_SMC,
+                                                    samples = 20,
+                                                    verbose = 2)) 
+
+runtime1c = system.time(result1c <- SpatialSEIRModel(data_model_1,
+                                                    exposure_model_1,
+                                                    reinfection_model,
+                                                    gravity_distance_model,
+                                                    #weibull_transition_priors,
+                                                    exp_transition_priors,
+                                                    initial_values,
+                                                    sampling_control_SMC,
+                                                    samples = 20,
+                                                    verbose = 2))
+
+# Interpretation of Beta_SE coefficients: https://github.com/grantbrown/ABSEIR/issues/17
+
+```
+
+```{r}
+timeMatrix = rbind(runtime1a,runtime1b, runtime1c)
+rownames(timeMatrix) = paste("model", 1:3)
+print(timeMatrix[,1:3])
+```
+
+```{r}
+comps <- compareModels(modelList = list(result1a, result1b, result1c), n_samples = 1000)
+```
+
+```{r}
+rownames(comps) <- colnames(comps) <- c("Distance", "CAR", "Gravity")
+print(comps)
+```
+
+
+```{r}
+# run for best model
+
+runtime_1a_sims = system.time(simulations1a <- epidemic.simulations(result1a, replicates = 50))
+runtime_1b_sims = system.time(simulations1b <- epidemic.simulations(result1b, replicates = 50))
+runtime_1c_sims = system.time(simulations1c <- epidemic.simulations(result1c, replicates = 50))
+
+
+```
+
+
+```{r}
+plotPosteriorPredictive_firstwave <- function(simulations, nm){
+  Is <- lapply(simulations$simulationResults, function(x){x$I_star})
+  Is <- array(Reduce(c, Is), dim = c(nrow(Is[[1]]),
+                                           ncol(Is[[2]]),
+                                           length(Is)))
+  
+  Ism <- apply(Is, 1:2, mean)
+  Islb <- apply(Is, 1:2, quantile, probs = c(0.025))
+  Isub <- apply(Is, 1:2, quantile, probs = c(0.975))
+  
+  plotLocation <- function(x, model){
+    plot(first_wave_confirmed_sub[,x], ylim = c(0, max(Isub[,x])), xlab = "Epidemic Day", ylab = "New Cases",
+         main = paste(model, "\n location ", 
+                      colnames(spatial_sub)[x], sep = ""))
+    lines(Ism[,x], lty = 1, col = "blue")
+    lines(Islb[,x], lty = 2, col = "blue")
+    lines(Isub[,x], lty = 2, col = "blue")
+
+    
+    legend("topleft", legend = c("Mean", "95% CI", "Observed"), lty = c(1,2,0), 
+         pch = c(NA,NA,1), col = c("blue", "blue", "black"), cex = 1)
+  }
+  
+  for (i in 1:ncol(spatial_sub)){
+    plotLocation(i, nm)
+  }
+}
+```
+
+
+```{r}
+plotPosteriorPredictive_firstwave(result1a, "Model 1a: Posterior Distribution")
+plotPosteriorPredictive_firstwave(simulations1a, "Model 1a: Posterior Predictive Distribution")
+```
+
+```{r}
+plotPosteriorPredictive_firstwave(result1b, "Model 1b: Posterior Distribution")
+plotPosteriorPredictive_firstwave(simulations1b, "Model 1b: Posterior Predictive Distribution")
+```
+
+```{r}
+plotPosteriorPredictive_firstwave(result1c, "Model 1c: Posterior Distribution")
+plotPosteriorPredictive_firstwave(simulations1c, "Model 1c: Posterior Predictive Distribution")
+```
+
+
+```{r}
+summary(result1b)
+```
+
+```{r}
+
+# discuss difference in non-spatial analysis versus spatial in terms of increased matrix size...must define exposure process for each location...ex with model 1: 7 cols for spatial (3 intercepts to describe each location's exposure process and time basis) vs 4 cols for non-spatial plus 3 x nrow (timepoints) rows for spatial whereas only nrow for non-spatial
+# distance model better...assumes different contact intensities for each pair of locations >>> data can be explained by these parameters rather than assuming that each states has the same contact intensity
+# spatial autocorrelation parameter for relationship between florida and georgia is highest...these two locations also have the higher cases per 100k when compared to georgia so this makes sense...more contact between people in fl and georgia therefore causing cases to rise in both states
+
+```
+
+```{r}
+
+sub.locations <- ncol(spatial_sub)
+sub.timepoints_list <- 1:nrow(firstandsecond_wave_confirmed_sub)
+sub.timepoints <- length(sub.timepoints_list)
+intervention_date = as.Date("2020-04-03", "%Y-%m-%d")
+
+time_basis_interventions = bs(1:nrow(firstandsecond_wave_confirmed_sub), 
+                              knots = seq(0, 500, by = 60), degree = 4)[rep(1:nrow(firstandsecond_wave_confirmed_sub),
+                                                                            ncol(firstandsecond_wave_confirmed_sub)),]
+
+intervention_date_al = as.Date("2020-04-04", "%Y-%m-%d")
+intervention_date_fl = as.Date("2020-04-03", "%Y-%m-%d")
+intervention_date_ge = intervention_date_fl
+
+reopen_date_al = as.Date("2021-05-31", "%Y-%m-%d")
+reopen_date_fl = as.Date("2021-06-01", "%Y-%m-%d")
+reopen_date_ge = reopen_date_al
+
+
+
+X_shift_al <- cbind(1, 
+       1*(firstandsecond_wave_confirmed_sub_with_date$date>= intervention_date_al), 
+       1*(firstandsecond_wave_confirmed_sub_with_date$date >= reopen_date_al))
+
+X_shift_fl <- cbind(1, 
+       1*(firstandsecond_wave_confirmed_sub_with_date$date>= intervention_date_fl), 
+       1*(firstandsecond_wave_confirmed_sub_with_date$date >= reopen_date_fl))
+
+X_shift_ge <- cbind(1, 
+       1*(firstandsecond_wave_confirmed_sub_with_date$date>= intervention_date_ge), 
+       1*(firstandsecond_wave_confirmed_sub_with_date$date >= reopen_date_ge))
+
+X_shift_bind <- rbind(X_shift_al,X_shift_fl,X_shift_ge)
+X_shift_matrix <- cbind(X_shift_bind, time_basis_interventions)
+
+
+X_pw_al <- cbind(1, cumsum(firstandsecond_wave_confirmed_sub_with_date$date >= intervention_date_al)/100, 
+             cumsum((firstandsecond_wave_confirmed_sub_with_date$date >= reopen_date_al))/100) 
+X_pw_fl <- cbind(1, cumsum(firstandsecond_wave_confirmed_sub_with_date$date >= intervention_date_fl)/100, 
+             cumsum((firstandsecond_wave_confirmed_sub_with_date$date >= reopen_date_fl))/100) 
+X_pw_ge <- cbind(1, cumsum(firstandsecond_wave_confirmed_sub_with_date$date >= intervention_date_ge)/100, 
+             cumsum((firstandsecond_wave_confirmed_sub_with_date$date >= reopen_date_ge))/100) 
+intervention_matrix_pw = cbind(rbind(X_pw_al, X_pw_fl, X_pw_ge), time_basis_interventions)
+
+
+c_al <- cumsum(1*((firstandsecond_wave_confirmed_sub_with_date$date >= intervention_date_al)))
+c_fl <- cumsum(1*((firstandsecond_wave_confirmed_sub_with_date$date >= intervention_date_fl)))
+
+
+# ref: https://stats.stackexchange.com/questions/517375/splines-relationship-of-knots-degree-and-degrees-of-freedom
+sharedBasis <- bs(0:nrow(firstandsecond_wave_confirmed_sub), 
+                  knots = seq(0, round_any(nrow(firstandsecond_wave_confirmed_sub), 100, f = ceiling) , by = 60), 
+                              degree = 4) 
+time_basis_al = predict(sharedBasis, c_al) # evaluate basis at new data
+time_basis_fl = predict(sharedBasis, c_fl)
+time_basis_ge = time_basis_al
+
+time_basis <- rbind(time_basis_al,time_basis_fl,time_basis_ge)
+
+X_splines <- as.matrix(cbind(1,time_basis)
+                       )
+
+# testing seasonality fit
+# ref: https://stats.stackexchange.com/questions/77080/question-about-eliminating-seasonality
+# ---------------------------------------------------------------------------------------------------------------
+# t <- sub.timepoints_list
+# cos.t <- cos(2*pi*t/sub.timepoints)
+# sin.t <- sin(2*pi*t/sub.timepoints)
+# trig.t <- sin.t * cos.t
+# trend <- lm(firstandsecond_wave_confirmed_sub ~ t + cos.t + sin.t + trig.t)
+# test <- ts(firstandsecond_wave_confirmed_sub, frequency=sub.timepoints)
+# timeseries <- fourier(test,3)
+# fit  <- tslm(test ~ timeseries + trend)
+# plot(test[,1])
+# lines(fit$fitted.values[,1], col="red")
+
+exposure_model_2 = ExposureModel(X_shift_matrix,
+                                 nTpt = sub.timepoints,
+                                 nLoc = sub.locations, 
+                                 betaPriorPrecision = rep(0.5, ncol(X_shift_matrix)),
+                                 betaPriorMean = c(rep(-1, 1),
+                                                   rep(-1.795767, 1),
+                                                   rep(0, ncol(X_shift_matrix)-2)))
+
+exposure_model_3 = ExposureModel(intervention_matrix_pw, # change with other variables for corresponding models
+  #cbind(1,intervention_term),
+                                nTpt = sub.timepoints,
+                                nLoc = sub.locations, 
+                                betaPriorPrecision = rep(0.5, ncol(intervention_matrix_pw)),
+                                betaPriorMean = c(rep(-1, 1), # more positive = more variance/intensity
+                                                  rep(-1.795767, 1),
+                                                  rep(0, ncol(intervention_matrix_pw)-2)))
+
+exposure_model_4 = ExposureModel(X_splines,
+                                 nTpt = sub.timepoints,
+                                 nLoc = sub.locations, 
+                                 betaPriorPrecision = rep(0.5, ncol(X_splines)),
+                                 betaPriorMean = c(rep(-1, 1), # more positive = more variance/intensity
+                                                  rep(-1.795767, ncol(sharedBasis))))
+
+```
+
+```{r}
+#runtime2a = system.time(result2a <- SpatialSEIRModel(data_model_2,
+#                                                    exposure_model_2,
+#                                                    reinfection_model,
+#                                                    distance_model,
+#                                                   #weibull_transition_priors,
+#                                                    exp_transition_priors,
+#                                                    initial_values,
+#                                                    sampling_control_SMC, # talk about this in relation to computational time...batches etc
+#                                                    samples = 20,
+#                                                    verbose = 2)) #2970.5
+
+runtime2 = system.time(result2 <- SpatialSEIRModel(data_model_2,
+                                                    exposure_model_2,
+                                                    reinfection_model,
+                                                    CAR_model,
+                                                   #weibull_transition_priors,
+                                                    exp_transition_priors,
+                                                    initial_values,
+                                                    sampling_control_SMC, 
+                                                    samples = 20,
+                                                    verbose = 2))
+
+# gravity and distance models performs so poorly in previous analysis so we omit it for longer timeline
+
+#runtime2c = system.time(result2c <- SpatialSEIRModel(data_model_2,
+#                                                    exposure_model_2,
+#                                                    reinfection_model,
+#                                                    gravity_distance_model,
+#                                                   #weibull_transition_priors,
+#                                                    exp_transition_priors,
+#                                                    initial_values,
+#                                                    sampling_control_SMC, 
+#                                                    samples = 20,
+#                                                    verbose = 2)) 
+
+#runtime3a = system.time(result3a <- SpatialSEIRModel(data_model_2,
+#                                                    exposure_model_3,
+#                                                    reinfection_model,
+#                                                    distance_model,
+                                                   #weibull_transition_priors,
+#                                                    exp_transition_priors,
+#                                                    initial_values,
+#                                                    sampling_control_SMC, 
+#                                                    samples = 20,
+#                                                    verbose = 2)) 
+
+runtime3 = system.time(result3 <- SpatialSEIRModel(data_model_2,
+                                                    exposure_model_3,
+                                                    reinfection_model,
+                                                    CAR_model,
+                                                   #weibull_transition_priors,
+                                                    exp_transition_priors,
+                                                    initial_values,
+                                                    sampling_control_SMC,
+                                                    samples = 20,
+                                                    verbose = 2))
+
+#runtime3c = system.time(result3c <- SpatialSEIRModel(data_model_2,
+#                                                    exposure_model_3,
+#                                                    reinfection_model,
+#                                                    gravity_distance_model,
+#                                                   #weibull_transition_priors,
+#                                                    exp_transition_priors,
+#                                                    initial_values,
+#                                                    sampling_control_SMC,
+#                                                    samples = 20,
+#                                                   verbose = 2)) 
+
+runtime4 = system.time(result4 <- SpatialSEIRModel(data_model_2,
+                                                    exposure_model_4,
+                                                    reinfection_model,
+                                                    CAR_model,
+                                                   #weibull_transition_priors,
+                                                    exp_transition_priors,
+                                                    initial_values,
+                                                    sampling_control_SMC,
+                                                    samples = 20,
+                                                    verbose = 2))
+
+```
+```{r}
+comps_inter <- compareModels(modelList = list(result2, result3, result4), n_samples = 1000)
+```
+
+```{r}
+rownames(comps_inter) <- colnames(comps_inter) <- c("Shift", "Piecewise", "Splines")
+print(comps_inter)
+```
+
+
+```{r}
+timeMatrix = rbind(runtime2,runtime3,runtime4)
+rownames(timeMatrix) = paste("model", 2:4)
+print(timeMatrix[,1:3])
+```
+
+
+```{r}
+# run sims for best models 
+
+#runtime_2a_sims = system.time(simulations2a <- epidemic.simulations(result2a, replicates = 50))
+runtime_2_sims = system.time(simulations2 <- epidemic.simulations(result2, replicates = 50))
+#runtime_2c_sims = system.time(simulations2c <- epidemic.simulations(result2c, replicates = 50))
+
+#runtime_3a_sims = system.time(simulations3a <- epidemic.simulations(result3a, replicates = 50))
+runtime_3_sims = system.time(simulations3 <- epidemic.simulations(result3, replicates = 50))
+#runtime_3c_sims = system.time(simulations3c <- epidemic.simulations(result3c, replicates = 50))
+
+runtime_4_sims = system.time(simulations4 <- epidemic.simulations(result4, replicates = 50))
+
+
+
+
+```
+
+```{r}
+plotPosteriorPredictive_firstandsecondwave <- function(simulations, nm){
+  Is <- lapply(simulations$simulationResults, function(x){x$I_star})
+  Is <- array(Reduce(c, Is), dim = c(nrow(Is[[1]]),
+                                           ncol(Is[[2]]),
+                                           length(Is)))
+  
+  Ism <- apply(Is, 1:2, mean)
+  Islb <- apply(Is, 1:2, quantile, probs = c(0.025))
+  Isub <- apply(Is, 1:2, quantile, probs = c(0.975))
+  
+  plotLocation <- function(x, model){
+    plot(firstandsecond_wave_confirmed_sub[,x], ylim = c(0, max(Isub[,x])), xlab = "Epidemic Day", ylab = "New Cases",
+         main = paste(model, "\n location ", 
+                      colnames(spatial_sub)[x], sep = ""))
+    lines(Ism[,x], lty = 1, col = "blue")
+    lines(Islb[,x], lty = 2, col = "blue")
+    lines(Isub[,x], lty = 2, col = "blue")
+
+    
+    legend("topleft", legend = c("Mean", "95% CI", "Observed"), lty = c(1,2,0), 
+         pch = c(NA,NA,1), col = c("blue", "blue", "black"), cex = 1)
+  }
+  
+  for (i in 1:ncol(spatial_sub)){
+    plotLocation(i, nm)
+  }
+}
+```
+
+
+```{r}
+plotPosteriorPredictive_firstandsecondwave(result2, "Model 2: Posterior Distribution")
+plotPosteriorPredictive_firstandsecondwave(simulations2, "Model 2: Posterior Predictive Distribution")
+```
+```{r}
+plotPosteriorPredictive_firstandsecondwave(result3, "Model 3: Posterior Distribution")
+plotPosteriorPredictive_firstandsecondwave(simulations3, "Model 3: Posterior Predictive Distribution")
+```
+
+```{r}
+plotPosteriorPredictive_firstandsecondwave(result4, "Model 4: Posterior Distribution")
+plotPosteriorPredictive_firstandsecondwave(simulations4, "Model 4: Posterior Predictive Distribution")
+```
+
+
+```{r}
+summary(result2)
+```
+
+
+
+
+```{r}
+time_basis_vaccines = bs(1:nrow(vaccines_dates), degree = 4)[rep(1:nrow(vaccines_dates), 1),]
+
+filter_vaccines_al <- vaccinations_alabama %>%
+  filter(date >= "2021-10-21" & date <="2022-03-01")
+filter_vaccines_fl <- vaccinations_florida %>%
+  filter(date >= "2021-10-21" & date <="2022-03-01")
+filter_vaccines_ge <- vaccinations_georgia %>%
+  filter(date >= "2021-10-21" & date <="2022-03-01")
+
+time_varying_covariates_al <- data.frame(prop_vaxxed = filter_vaccines_al$vaxxed/N[1,],
+                                        prop_fully_vaxxed = filter_vaccines_al$fully_vaxxed/N[1,],
+                                        prop_boosted = filter_vaccines_al$boosted/N[1,])
+time_varying_covariates_fl <- data.frame(prop_vaxxed = filter_vaccines_fl$vaxxed/N[2,],
+                                        prop_fully_vaxxed = filter_vaccines_fl$fully_vaxxed/N[2,],
+                                        prop_boosted = filter_vaccines_fl$boosted/N[2,])
+time_varying_covariates_ge <- data.frame(prop_vaxxed = filter_vaccines_ge$vaxxed/N[3,],
+                                        prop_fully_vaxxed = filter_vaccines_ge$fully_vaxxed/N[3,],
+                                        prop_boosted = filter_vaccines_ge$boosted/N[3,])
+
+time_varying_covariates <- rbind(time_varying_covariates_al, time_varying_covariates_fl, time_varying_covariates_ge)
+
+exposure.design.matrix <- as.matrix(
+                            cbind(
+                              time_varying_covariates,
+                              time_basis_vaccines 
+                            )
+                          )
+
+exposure_model_5 = ExposureModel(X = exposure.design.matrix,
+                                      nTpt = nrow(vaccines_dates),
+                                      nLoc = sub.locations,
+                                      betaPriorPrecision = rep(0.5, ncol(exposure.design.matrix)),
+                                      betaPriorMean = c(rep(0.4118, ncol(time_varying_covariates)), # researched prior mean...informative vs non-informative?
+                                                 rep(0, ncol(time_basis_vaccines))))
+```
+
+```{r}
+runtime5 = system.time(result5 <- SpatialSEIRModel(data_model_vaccines,
+                                                    exposure_model_5,
+                                                    reinfection_model,
+                                                    distance_model,
+                                                   #weibull_transition_priors,
+                                                    exp_transition_priors,
+                                                    initial_values,
+                                                    sampling_control_SMC, 
+                                                    samples = 20,
+                                                    verbose = 2)) 
+
+```
+
+```{r}
+runtime_5_sims = system.time(simulations5 <- epidemic.simulations(result5, replicates = 50))
+
+```
+
+```{r}
+plotPosteriorPredictive_vaccines <- function(simulations, nm){
+  Is <- lapply(simulations$simulationResults, function(x){x$I_star})
+  Is <- array(Reduce(c, Is), dim = c(nrow(Is[[1]]),
+                                           ncol(Is[[2]]),
+                                           length(Is)))
+  
+  Ism <- apply(Is, 1:2, mean)
+  Islb <- apply(Is, 1:2, quantile, probs = c(0.025))
+  Isub <- apply(Is, 1:2, quantile, probs = c(0.975))
+  
+  plotLocation <- function(x, model){
+    plot(vaccines_dates[,x], ylim = c(0, max(Isub[,x])), xlab = "Epidemic Day", ylab = "New Cases",
+         main = paste(model, "\n location ", 
+                      colnames(spatial_sub)[x], sep = ""))
+    lines(Ism[,x], lty = 1, col = "blue")
+    lines(Islb[,x], lty = 2, col = "blue")
+    lines(Isub[,x], lty = 2, col = "blue")
+
+    
+    legend("topleft", legend = c("Mean", "95% CI", "Observed"), lty = c(1,2,0), 
+         pch = c(NA,NA,1), col = c("blue", "blue", "black"), cex = 1)
+  }
+  
+  for (i in 1:ncol(spatial_sub)){
+    plotLocation(i, nm)
+  }
+}
+```
+
+```{r}
+plotPosteriorPredictive_vaccines(result5, "Model 5: Posterior Distribution")
+plotPosteriorPredictive_vaccines(simulations5, "Model 5: Posterior Predictive Distribution")
+```
+```{r}
+summary(result5)
+```
+
+```{r}
+
+count <- confirmed_sub
+
+lastTpt <- which(confirmed_sub_with_date$date == "2021-12-01")
+count[(lastTpt):length(count)] <- NA
+
+```
+
+```{r}
+
+data_model_full = DataModel(Y=count, 
+                             type = "identity",      
+                             compartment = "I_star", 
+                             cumulative = FALSE       
+                             )
+```
+
+```{r}
+
+c_al_full <- cumsum(1*((confirmed_sub_with_date$date >= intervention_date_al)))
+c_fl_full <- cumsum(1*((confirmed_sub_with_date$date >= intervention_date_fl)))
+
+
+# ref: https://stats.stackexchange.com/questions/517375/splines-relationship-of-knots-degree-and-degrees-of-freedom
+sharedBasis_full <- bs(0:nrow(confirmed_sub), 
+                  knots = seq(0, round_any(lastTpt, 50, f = ceiling) , by = 100), 
+                              degree = 4) 
+time_basis_al_full = predict(sharedBasis_full, c_al_full) # evaluate basis at new data
+time_basis_fl_full = predict(sharedBasis_full, c_fl_full)
+time_basis_ge_full = time_basis_al_full
+
+
+
+time_basis_full <- rbind(time_basis_al_full,time_basis_fl_full,time_basis_ge_full)
+
+
+
+
+X_splines_full <- as.matrix(cbind(1,time_basis_full)
+                       )
+
+
+time_varying_covariates_al_full <- data.frame(prop_vaxxed = vaccinations_alabama[1:nrow(confirmed_sub),"vaxxed"]/N[1,],
+                                        prop_fully_vaxxed = vaccinations_alabama[1:nrow(confirmed_sub),"fully_vaxxed"]/N[1,],
+                                        prop_boosted = vaccinations_alabama[1:nrow(confirmed_sub),"boosted"]/N[1,])
+time_varying_covariates_fl_full <- data.frame(prop_vaxxed = vaccinations_florida[1:nrow(confirmed_sub),"vaxxed"]/N[2,],
+                                        prop_fully_vaxxed = vaccinations_florida[1:nrow(confirmed_sub),"fully_vaxxed"]/N[2,],
+                                        prop_boosted = vaccinations_florida[1:nrow(confirmed_sub),"boosted"]/N[2,])
+time_varying_covariates_ge_full <- data.frame(prop_vaxxed = vaccinations_georgia[1:nrow(confirmed_sub),"vaxxed"]/N[3,],
+                                        prop_fully_vaxxed = vaccinations_georgia[1:nrow(confirmed_sub),"fully_vaxxed"]/N[3,],
+                                        prop_boosted = vaccinations_georgia[1:nrow(confirmed_sub),"boosted"]/N[3,])
+
+time_varying_covariates_full <- rbind(time_varying_covariates_al_full, 
+                                      time_varying_covariates_fl_full, 
+                                      time_varying_covariates_ge_full)
+
+exposure.design.matrix <- as.matrix(
+                            cbind(
+                              X_splines_full,
+                              time_varying_covariates_full
+                            )
+                          )
+
+exposure_model_full = ExposureModel(exposure.design.matrix,
+                                nTpt = nrow(confirmed_sub),
+                                nLoc = sub.locations,
+                                betaPriorPrecision = 0.5,
+                                betaPriorMean = c(rep(-1, 1), # more positive = more variance/intensity
+                                                  rep(-1.795767, ncol(sharedBasis_full)),
+                                                  rep(0.4118, ncol(time_varying_covariates_full)))) #
+
+```
+
+```{r}
+sampling_control_full_basic = SamplingControl(seed = 123123, 
+                                    n_cores = 8,
+                                    algorithm="BasicABC",
+                                    list(batch_size = 2000,
+                                         #init_batch_size = 1000000,
+                                         epochs = 1e6,
+                                         max_batches = 100,
+                                         shrinkage = 0.99,
+                                         multivariate_perturbation=FALSE,
+                                         keep_compartments = TRUE
+                                    )
+ )
+
+sampling_control_full_SMC = SamplingControl(seed = 123123, 
+                                    n_cores = 8,
+                                    algorithm="Beaumont2009",
+                                    list(batch_size = 2000,
+                                         init_batch_size = 1000000,
+                                         epochs = 1e6,
+                                         max_batches = 100,
+                                         shrinkage = 0.99,
+                                         multivariate_perturbation=FALSE,
+                                         keep_compartments = TRUE
+                                    )
+ )
+
+runtime6 = system.time(result6 <- SpatialSEIRModel(data_model_full,
+                                                    exposure_model_full,
+                                                    reinfection_model,
+                                                    distance_model,
+                                                   #weibull_transition_priors,
+                                                    exp_transition_priors,
+                                                    initial_values,
+                                                    sampling_control_full_basic,
+                                                    samples = 20,
+                                                    verbose = 2))
+
+runtime7 = system.time(result7 <- SpatialSEIRModel(data_model_full,
+                                                    exposure_model_full,
+                                                    reinfection_model,
+                                                    distance_model,
+                                                   #weibull_transition_priors,
+                                                    exp_transition_priors,
+                                                    initial_values,
+                                                    sampling_control_full_SMC,
+                                                    samples = 20,
+                                                    verbose = 2))
+```
+
+```{r}
+runtime_6_sims = system.time(simulations6 <- epidemic.simulations(result6, replicates = 50,verbose = TRUE))
+runtime_7_sims = system.time(simulations7 <- epidemic.simulations(result7, replicates = 50,verbose = TRUE))
+
+
+```
+
+
+```{r}
+plotPosteriorPredictive = function(simulations, rawData, main, lastTime)
+{
+  Is <- lapply(simulations$simulationResults, function(x){x$I_star})
+  Is <- array(Reduce(c, Is), dim = c(nrow(Is[[1]]),
+                                           ncol(Is[[2]]),
+                                           length(Is)))
+  
+  lowerQuantile = apply(Is, 1, quantile, probs = c(0.025))
+  posteriorMean = apply(Is, 1, mean)
+  upperQuantile = apply(Is, 1, quantile, probs = c(0.975))
+  
+  
+  plotLocation <- function(x, model){
+    plot(rawData[,x], ylim = c(0, max(rawData[,x])*1.5),
+       xlab = "Epidemic Day", ylab = "New Cases", main = paste(model, "\n location ", 
+                      colnames(spatial_sub)[x], sep = ""),
+       col = ifelse(1:length(rawData[,x]) <= lastTime, "black", "red"))
+  lines(upperQuantile, lty = 2, col = "blue")
+  lines(lowerQuantile, lty = 2, col = "blue")
+  lines(posteriorMean, lty = 1, col = "blue")
+  
+  legend("topleft", legend = c("Mean", "95% CI", "Observed", "Future"), lty = c(1,2,0,0), 
+         pch = c(NA,NA,1,1), col = c("blue", "blue", "black","red"), cex = 1)
+  }
+  for (i in 1:ncol(spatial_sub)){
+    plotLocation(i, main)
+  }
+}
+
+```
+```{r}
+plotPosteriorPredictive(result6, confirmed_sub, "Full Model (Basic ABC): Posterior Distribution", lastTpt)
+plotPosteriorPredictive(simulations6, confirmed_sub, "Full Model (Basic ABC): Posterior Predictive Distribution", lastTpt)
+```
+
+```{r}
+plotPosteriorPredictive(result6, confirmed_sub, "Full Model (SMC-ABC): Posterior Distribution", lastTpt)
+plotPosteriorPredictive(simulations6, confirmed_sub, "Full Model (SMC-ABC): Posterior Predictive Distribution", lastTpt)
+```
+
+```{r}
+summary(result6)
+```
+```{r}
+timeMatrix = rbind(runtime1b,runtime2,runtime3,runtime4,runtime5, runtime6)
+rownames(timeMatrix) = paste("model", 1:6)
+print(timeMatrix[,1:3])
+```
+
+```{r}
+
+# taking the average of all estimates subtracted from the true mean reveals bias estimate
+
+bias_per(y = exp_transition_priors$p_ei, yhat = simulations6$params[,"gamma_EI"])
+bias_per(y = exp_transition_priors$p_ir, yhat = simulations6$params[,"gamma_IR"])
+```
+
+```{r}
+
+# the ratio of times the confidence intervals overlaps the true mean gives a coverage estimate
+
+coverage_and_width <-function(sims, column){
+  
+  for (i in length(sims$simulationResults)){
+    
+  }
+  
+  qtiles =  sims$params[,column] %>% quantile(probs = c(0.025, 0.975))
+
+  
+  a = mean(qtiles[1] <= sims$params[,column] & sims$params[,column] <= qtiles[2] ) # should be column of quantiles
+  
+  b = mean(qtiles[2]) - mean(qtiles[1])
+  
+  return(list(coverage=a, width=b))
+}
+
+# use simulation results to get CI (from simulations and params) as well as means for bias 
+```
+
+
+
+```{r}
+coverage_and_width(simulations6, "gamma_EI"
+                   )
+```
+\
+
+
+
+
+
+
+
+
+
+
+
+
