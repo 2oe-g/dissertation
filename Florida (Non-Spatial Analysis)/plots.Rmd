@@ -210,9 +210,6 @@ eta_m11 <- exposure_model_11$X %*% t(result11$param.samples[,beta_idx_m11]) # ge
 
 ```{r}
 summary(result1)
-# shape and scale estimates are higher as this model only considers the beginning of the pandemic whereas others have longer timeline...
-# since beginning (one peak), the rate of transmission (hazard level) compared to more full timeline (two peaks) is higher
-# "The level of hazard is expected to fall as the time since the pandemic peak increases"
 ```
 
 # Model 2
@@ -225,10 +222,6 @@ summary(result2)
 
 ```{r}
 summary(result3)
-
-# effect of first intervention is stronger than that of the stay at home order in terms of flattening curve
-# ideally cases should decrease after second intervention however they stay at a constant rate/number hence the position beta se estsimate for saho
-# in fact this timeline overlaps with the reopen date/end of saho.....this is what is possibly (?) masking the effect of the saho such that the intensity appears to increase but actually this increas is due to the reopening
 ```
 
 # Model 4
@@ -247,7 +240,6 @@ summary(result5)
 
 ```{r}
 summary(result6)
-# 1-exp(-gamma) = p_ei is transition prob and 1/gamma is the mean period
 ```
 
 # Model 6 (SMC-ABC, Weibull Distribution)
