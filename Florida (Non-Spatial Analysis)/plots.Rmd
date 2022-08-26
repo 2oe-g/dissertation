@@ -52,8 +52,7 @@ plotPosteriorPredictive_firstwave(result1, "Model 1: Posterior Distribution")
 ```{r}
 plotPosteriorPredictive_firstwave(simulations2, "Model 2: Posterior Predictive Distribution")
 plotPosteriorPredictive_firstwave(result2, "Model 2: Posterior Distribution")
-# interventions start at day 35
-# assumes constant transmission until the introduction of control measures afterwhich transmission decays...hence why we see the model predict a peak around day 40-45 and decreases afterwards
+
 ```
 
 ```{r}
@@ -72,77 +71,91 @@ plotPosteriorPredictive_interventions(result4, "Model 4: Posterior Distribution"
 plotPosteriorPredictive_interventions(simulations5, "Model 5: Posterior Predictive Distribution")
 plotPosteriorPredictive_interventions(result5, "Model 5: Posterior Distribution")
 
-# two interventions plus time basis
+# two interventions plus time basis of 3
 ```
 
 ```{r}
 plotPosteriorPredictive_interventions(simulations6, "Model 6: Posterior Predictive Distribution")
 plotPosteriorPredictive_interventions(result6, "Model 6: Posterior Distribution")
 
-# two interventions plus reopen
+# two interventions plus time basis of 4
 ```
 
 ```{r}
 plotPosteriorPredictive_interventions(simulations7, "Model 7: Posterior Predictive Distribution")
 plotPosteriorPredictive_interventions(result7, "Model 7: Posterior Distribution")
 
-# two interventions, reopen and time basis
+# two interventions plus time basis of 5
 ```
 
 ```{r}
 plotPosteriorPredictive_interventions(simulations8, "Model 8: Posterior Predictive Distribution")
 plotPosteriorPredictive_interventions(result8, "Model 8: Posterior Distribution")
 
-# two interventions, reopen and trig function
+# two interventions plus time basis of 6
 ```
 
 ```{r}
 plotPosteriorPredictive_interventions(simulations9, "Model 9: Posterior Predictive Distribution")
 plotPosteriorPredictive_interventions(result9, "Model 9: Posterior Distribution")
 
-# two interventions, reopen and trig function
+# two interventions, reopen
 ```
 
 ```{r}
 plotPosteriorPredictive_interventions(simulations10, "Model 10: Posterior Predictive Distribution")
 plotPosteriorPredictive_interventions(result10, "Model 10: Posterior Distribution")
 
-# two interventions, reopen and trig function
+# two interventions, reopen and time basis of 3
 ```
 
 ```{r}
 plotPosteriorPredictive_interventions(simulations11, "Model 11: Posterior Predictive Distribution")
 plotPosteriorPredictive_interventions(result11, "Model 11: Posterior Distribution")
 
-# two interventions, reopen and trig function
+# two interventions, reopen and time basis of 4
 ```
 
 ```{r}
 plotPosteriorPredictive_interventions(simulations12, "Model 12: Posterior Predictive Distribution")
 plotPosteriorPredictive_interventions(result12, "Model 12: Posterior Distribution")
 
-# use vaccines for spatial case only
+# two interventions, reopen and time basis of 5
 ```
 
 ```{r}
 plotPosteriorPredictive_interventions(simulations13, "Model 13: Posterior Predictive Distribution")
 plotPosteriorPredictive_interventions(result13, "Model 13: Posterior Distribution")
 
-# use vaccines for spatial case only
+# two interventions, reopen and time basis of 6
 ```
 
 ```{r}
 plotPosteriorPredictive_interventions(simulations14, "Model 14: Posterior Predictive Distribution")
 plotPosteriorPredictive_interventions(result14, "Model 14: Posterior Distribution")
 
-# use vaccines for spatial case only
+# two interventions, reopen and trig temporal term
 ```
 
 ```{r}
 plotPosteriorPredictive_interventions(simulations6_weibull, "Model 6 (Weibull Distribution): Posterior Predictive Distribution")
 plotPosteriorPredictive_interventions(result6_weibull, "Model 6 (Weibull Distribution): Posterior Distribution")
 
-# use vaccines for spatial case only
+# two interventions and time basis of 4
+```
+
+```{r}
+plotPosteriorPredictive_interventions(simulations6_exp_basic, "Model 6 (Basic ABC): Posterior Predictive Distribution")
+plotPosteriorPredictive_interventions(result6_exp_basic, "Model 6 (Basic ABC): Posterior Distribution")
+
+# two interventions and time basis of 4
+```
+
+```{r}
+plotPosteriorPredictive_interventions(simulations6_weibull_basic, "Model 6 (Weibull, Basic ABC): Posterior Predictive Distribution")
+plotPosteriorPredictive_interventions(result6_weibull_basic, "Model 6 (Weibull, Basic ABC): Posterior Distribution")
+
+# two interventions and time basis of 4
 ```
 
 ```{r}
@@ -230,11 +243,29 @@ summary(result4)
 summary(result5)
 ```
 
-# Model 6
+# Model 6 (SMC-ABC, Exponential Distribution)
 
 ```{r}
 summary(result6)
 # 1-exp(-gamma) = p_ei is transition prob and 1/gamma is the mean period
+```
+
+# Model 6 (SMC-ABC, Weibull Distribution)
+
+```{r}
+summary(result6_weibull)
+```
+
+# Model 6 (Basic ABC, Weibull Distribution)
+
+```{r}
+summary(result6_weibull_basic)
+```
+
+# Model 6 (Basic ABC, Exponential Distribution)
+
+```{r}
+summary(result6_exp_basic)
 ```
 
 # Model 7
@@ -291,12 +322,6 @@ summary(result14)
 summary(result15)
 ```
 
-# Model 6 (Weibull Distribution)
-
-```{r}
-summary(result6_weibull)
-```
-
 # Bayes Factor (Model 2 vs Model 3)
 
 ```{r}
@@ -345,7 +370,7 @@ compareModels(list(result6, result6_weibull), n_samples = 1000,
 # weibull better
 ```
 
-# Coverage, width and bias for model 6 (latent and infectious period estimates)
+# Coverage, width and bias for model 6 with exponential distribution, SMC-ABC (latent and infectious period estimates)
 
 ```{r}
 get_coverage_ei(simulations6, exp_transition_priors$p_ei) # underestimates latent period (minuscule)
@@ -353,6 +378,16 @@ get_coverage_ei(simulations6, exp_transition_priors$p_ei) # underestimates laten
 
 ```{r}
 get_coverage_ir(simulations6, exp_transition_priors$p_ir)  # increased bias magnitude due to less confidence in terms of prior infectious period...slightly overestimates infectious period
+```
+
+# Coverage, width and bias for model 6 with exponential distribution, basic ABC (latent and infectious period estimates)
+
+```{r}
+get_coverage_ei(simulations6_exp_basic, exp_transition_priors$p_ei) # underestimates latent period (minuscule)
+```
+
+```{r}
+get_coverage_ir(simulations6_exp_basic, exp_transition_priors$p_ir)  # increased bias magnitude due to less confidence in terms of prior infectious period...slightly overestimates infectious period
 ```
 
 # Coverage, width and bias for model 11 (latent and infectious period estimates)
@@ -365,7 +400,7 @@ get_coverage_ei(simulations11, exp_transition_priors$p_ei) # underestimates late
 get_coverage_ir(simulations11, exp_transition_priors$p_ir) # overestimates infectious period.....increased positive bias
 ```
 
-# Coverage, width and bias for model 6 with weibull distribution (latent and infectious period estimates (scale and shape))
+# Coverage, width and bias for model 6 with weibull distribution, SMC-ABC (latent and infectious period estimates (shape and scale))
 
 ```{r}
 get_coverage_weibull(simulations6_weibull,weibull_alpha_latent,"latent_shape")
@@ -383,12 +418,30 @@ get_coverage_weibull(simulations6_weibull,weibull_alpha_infectious,"infectious_s
 get_coverage_weibull(simulations6_weibull,weibull_beta_infectious,"infectious_scale")
 ```
 
+# Coverage, width and bias for model 6 with weibull distribution, Basic ABC (latent and infectious period estimates (shape and scale))
+
+```{r}
+get_coverage_weibull(simulations6_weibull_basic,weibull_alpha_latent,"latent_shape")
+```
+
+```{r}
+get_coverage_weibull(simulations6_weibull_basic,weibull_beta_latent,"latent_scale")
+```
+
+```{r}
+get_coverage_weibull(simulations6_weibull_basic,weibull_alpha_infectious,"infectious_shape")
+```
+
+```{r}
+get_coverage_weibull(simulations6_weibull_basic,weibull_beta_infectious,"infectious_scale")
+```
+
 # Runtimes
 
 ```{r}
 timeMatrix = rbind(runtime1,runtime2, runtime3, runtime4, runtime5, runtime6, runtime7, runtime8, runtime9, runtime10, runtime11,
-                   runtime12, runtime13, runtime14, runtime15, runtime6_weibull)
-rownames(timeMatrix) = paste("model", 1:16)
+                   runtime12, runtime13, runtime14, runtime15, runtime6_weibull, runtime6_exp_basic, runtime6_weibull_basic)
+rownames(timeMatrix) = paste("model", 1:18)
 print(timeMatrix[,1:3])
 # use in table with number of parameters and also number of timepoints
 ```
