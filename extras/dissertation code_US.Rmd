@@ -1,0 +1,515 @@
+---
+title: "dissertation code"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE}
+library(tidyverse)
+library(ABSEIR)
+library(splm)
+library(openxlsx)
+library(optparse)
+library(reshape2)
+library(lubridate)
+library(splines)
+```
+
+```{r}
+us <- read.csv("https://raw.githubusercontent.com/nytimes/covid-19-data/master/rolling-averages/us.csv", header = TRUE, sep = ",")
+
+vaccinations <- read.csv("https://raw.githubusercontent.com/owid/covid-19-data/master/public/data/vaccinations/us_state_vaccinations.csv", header = TRUE, sep = ",")
+
+
+interventions <- read.csv("https://raw.githubusercontent.com/OxCGRT/covid-policy-tracker/master/data/United%20States/OxCGRT_USA_latest.csv", header = TRUE, 
+                           sep = ",")
+
+#interventions <- interventions %>%
+ # filter(CountryCode == "USA")
+```
+
+
+
+
+```{r}
+
+# adding weeks from date of first recorded cases
+
+us <- us %>%
+  mutate(weeks = as.numeric(floor(difftime(us$date, as.Date("2020-01-21"), units="weeks")+1)))
+
+weeks <- unique(us$weeks)
+
+
+first_wave <- us %>%
+  filter(date <= "2021-03-31")
+
+second_wave <- us %>%
+  filter(date >= "2021-03-31" & date <= "2021-08-31" )
+
+third_wave <- us %>%
+  filter(date >= "2021-08-31")
+
+first_and_second_wave <- us %>%
+  filter(date <= "2021-08-31" )
+
+second_and_third_waves <- us %>%
+  filter(date >= "2021-03-31" )
+
+cases <- us$cases
+cases[(nrow(first_wave)+1):length(cases)] <- NA
+
+vaccinations_us <- vaccinations %>%
+  filter(location == "United States")
+
+latest_vaxxed = tail(na.omit(vaccinations_us$people_vaccinated),1) # at least one vaccine; does not include counts for second dose
+latest_fully_vaxxed = tail(na.omit(vaccinations_us$people_fully_vaccinated),1)  # counts for first and second doses
+latest_boosted = tail(na.omit(vaccinations_us$total_boosters),1) # only those with boosters
+
+
+```
+
+
+
+```{r data, echo=TRUE, eval=TRUE}
+
+#data_model_fl = DataModel(states$cases,
+                       # type = "identity",
+                       # compartment="I_star",
+                       # cumulative=FALSE)
+
+data_model = DataModel(us$cases, 
+                             type = "identity",      # Assume data is correct 
+                             compartment = "I_star", # Data related to new infections
+                             cumulative = FALSE       # Not reported on cumulative scale
+                             )
+
+# FIX DATASET...NEGATIVE VALUES PRESENT
+```
+
+```{r exposure, echo=TRUE, eval=TRUE}
+
+time_basis = bs(1:nrow(us), degree = 4)[rep(1:nrow(us), 1),]
+
+
+exposure_model_1 = ExposureModel(time_basis,
+                                nTpt = nrow(us),
+                                nLoc = 1,
+                                betaPriorPrecision = 0.5,
+                                betaPriorMean = c(rep(-3.1, ncol(time_basis)))) # good
+
+```
+```{r}
+intervention_date = as.Date("2020-04-01", "%Y-%m-%d") # from CDC website; crosschecked with several other sources
+
+reopen_date = as.Date("2020-07-01", "%Y-%m-%d")
+
+# consider adding date (or closest thing to it) for mask mandates
+
+X_shift <- cbind(1, 
+       1*(us$date >= intervention_date), 
+       1*(us$date >= reopen_date))
+
+#c1 <- cumsum(1*((us$date >= intervention_date)))
+ # sharedBasis <- bs(0:200, degree = 4) 
+#X_splines <- as.matrix(cbind(1,predict(sharedBasis,c1)))
+
+time_invariant_covariates <- data.frame(prop_vaxxed = latest_vaxxed/328239523,
+                                        prop_fully_vaxxed = latest_fully_vaxxed/328239523,
+                                        prop_boosted = latest_boosted/328239523)
+
+#time_varying_covariates <- data.frame(sin_component = sin(us$weeks/52*2*pi),
+#                                      cos_component = cos(us$weeks/52*2*pi),
+ #                                     trig_interact = sin(us$weeks/52*2*pi)*cos(us$weeks/52*2*pi))
+#
+#intervention_matrix = cbind(1,intervention_date, reopen_date, time_basis)
+
+intervention_matrix = cbind(X_shift, time_basis)
+
+
+
+
+
+exposure_model_2 = ExposureModel(intervention_matrix,
+                                nTpt = nrow(us),
+                                nLoc = 1,
+                                betaPriorPrecision = 0.5,
+                                betaPriorMean = c(rep(0, ncol(X_shift)),
+                                                  rep(-2.1, ncol(time_basis)))) # good
+
+exposure.design.matrix <- as.matrix(
+                            cbind(
+                              time_invariant_covariates[rep(1, each = nrow(us)),],
+                              time_basis 
+                              #X_shift
+                              #time_varying_covariates[rep(1:nrow(us), 1),]
+                            )
+                          )
+
+#exposure_model_3 = ExposureModel(X_splines,
+#                                nTpt = nrow(us),
+#                               nLoc = 1,
+#                                betaPriorPrecision = 0.5,
+ #                               betaPriorMean = c(rep(-2, ncol(X_splines)))) # not good
+
+exposure_model_3 = ExposureModel(X = exposure.design.matrix,
+                                      nTpt = nrow(us),
+                                      nLoc = 1,
+                                      betaPriorPrecision = rep(0.95, ncol(exposure.design.matrix)),
+                                      betaPriorMean = c(rep(0.4118, ncol(time_invariant_covariates)),
+                                                 rep(-2.1, ncol(time_basis))))
+                                   
+                                  # c(rep(-3.1, ncol(exposure.design.matrix)))) # good
+
+#0.700102
+```
+
+
+
+```{r}
+initial_values = InitialValueContainer(S0 = 328239523, 
+                                             E0 = 2,
+                                             I0 = 2,
+                                             R0 = 0)
+```
+
+```{r reinfection, echo=TRUE, eval=TRUE}
+
+reinfection_model = ReinfectionModel("SEIR") # without reinfection rate
+
+```
+
+
+```{r distance, echo=TRUE, eval=TRUE}
+
+distance_model = DistanceModel(list(matrix(0))) # considering as one state therefore initialising with empty matrix
+
+```
+
+```{r}
+
+# Model to describe E to I and I to R transition probabilities.
+
+# Latent period: 2-14 days with median 5
+
+# find proper reference supporting this info  ^^
+
+# weibull distribution with parameters which follow a gamma(α, β) prior distribution....
+# in other words α and β are hyperparameters and a prior distribution of α and β is thus a hyperprior
+
+pickWeibullPars <- function(qdf){
+  rslt <- optim(par = c(1,1), fn = function(par){
+    sum((qweibull(p = qdf$q, shape = par[1], scale = par[2]) - qdf$x)^2)
+  })
+  rslt$par
+}
+
+pickGammaHyperPars <- function(mean, ESS){
+  b <- ESS/(mean+1)     # ESS = effective sample size
+  a <- ESS - b          # b = event occur rate and a = number of events occurred
+  c(a,b)
+}
+
+latent_par_means <- pickWeibullPars(qdf=data.frame(q=c(0.025,0.5,0.975),
+                                                   x=c(2,5,14)))
+infectious_par_means <- pickWeibullPars(qdf = data.frame(q=c(0.025,0.5,0.975),
+                                                         x = c(10,14,32)))
+
+weibull_transition_priors <- WeibullTransitionPriors(latent_shape_prior_alpha = pickGammaHyperPars(latent_par_means[1], 1000)[1],
+                                            latent_shape_prior_beta = pickGammaHyperPars(latent_par_means[1], 1000)[2],
+                                            latent_scale_prior_alpha = pickGammaHyperPars(latent_par_means[2], 1000)[1],
+                                            latent_scale_prior_beta = pickGammaHyperPars(latent_par_means[2], 1000)[2],
+                                            infectious_shape_prior_alpha = pickGammaHyperPars(infectious_par_means[1], 100)[1], #less certain about infectious period...in other words we have a larger range in which one can be infectious when compared to small latent period range so we use a smaller ESS
+                                            infectious_shape_prior_beta = pickGammaHyperPars(infectious_par_means[1], 100)[2],
+                                            infectious_scale_prior_alpha = pickGammaHyperPars(infectious_par_means[2], 100)[1],
+                                            infectious_scale_prior_beta = pickGammaHyperPars(infectious_par_means[2], 100)[2])
+
+weibull_alpha_latent = qgamma(0.1, weibull_transition_priors$latent_shape_prior_alpha,
+                        weibull_transition_priors$latent_shape_prior_beta) #minEIShape
+ 
+weibull_beta_latent = qgamma(0.9, weibull_transition_priors$latent_scale_prior_alpha,
+                        weibull_transition_priors$latent_scale_prior_beta) #maxEIScale
+
+weibull_alpha_infectious = qgamma(0.1, weibull_transition_priors$infectious_shape_prior_alpha,
+                        weibull_transition_priors$infectious_shape_prior_beta) #minIRShape
+ 
+weibull_beta_infectious = qgamma(0.9, weibull_transition_priors$infectious_scale_prior_alpha,
+                        weibull_transition_priors$infectious_scale_prior_beta) #maxIRScale
+```
+
+```{r}
+curve(dweibull(x, shape=weibull_alpha_latent, scale = weibull_beta_latent), from=0, to=25, xlab = "Days", ylab = "Probability")
+```
+```{r}
+curve(dweibull(x, shape=weibull_alpha_infectious, scale = weibull_beta_infectious), from=0, to=50,xlab = "Days", ylab = "Probability")
+```
+
+
+```{r sampling control, echo=TRUE, eval=TRUE}
+
+sampling_control_1 = SamplingControl(seed = 123123, 
+                                    n_cores = 8,
+                                    algorithm="Beaumont2009",
+                                    list(batch_size = 2000,
+                                         epochs = 1e6,
+                                         max_batches = 50,
+                                         shrinkage = 0.99,
+                                         multivariate_perturbation=FALSE,
+                                         keep_compartments = TRUE
+                                    )
+ )
+
+sampling_control_2 = SamplingControl(seed = 123123, 
+                                    n_cores = 8,
+                                    algorithm="Beaumont2009",
+                                    list(batch_size = 2000,
+                                         epochs = 1e6,
+                                         max_batches = 50,
+                                         shrinkage = 0.99,
+                                         multivariate_perturbation=FALSE,
+                                         keep_compartments = TRUE
+                                    )
+ )
+
+# algorithm="Beaumont2009" for SMC-ABC
+
+```
+
+```{r runtime and summary, echo=TRUE, eval=TRUE}
+
+#consider showing difference of weibull transition priors vs exponential transition priors
+
+runtime1 = system.time(result1 <- SpatialSEIRModel(data_model,
+                                                    exposure_model_1,
+                                                    reinfection_model,
+                                                    distance_model,
+                                                   weibull_transition_priors,
+                                                    #exp_transition_priors,
+                                                    initial_values,
+                                                    sampling_control_2,
+                                                    samples = 100,
+                                                    verbose = 2))
+runtime2 = system.time(result2 <- SpatialSEIRModel(data_model,
+                                                    exposure_model_2,
+                                                    reinfection_model,
+                                                    distance_model,
+                                                   weibull_transition_priors,
+                                                    #exp_transition_priors,
+                                                    initial_values,
+                                                    sampling_control_2,
+                                                    samples = 100,
+                                                    verbose = 2))
+runtime3 = system.time(result3 <- SpatialSEIRModel(data_model,
+                                                    exposure_model_3,
+                                                    reinfection_model,
+                                                    distance_model,
+                                                   weibull_transition_priors,
+                                                    #exp_transition_priors,
+                                                    initial_values,
+                                                    sampling_control_2,
+                                                    samples = 100,
+                                                    verbose = 2))
+# Interpretation of Beta_SE coefficients: https://github.com/grantbrown/ABSEIR/issues/17
+
+# works fine with 20 locations....crashes with full 48 states
+
+```
+```{r}
+timeMatrix = rbind(runtime1,runtime2, runtime3)
+rownames(timeMatrix) = paste("model", 1:3)
+print(timeMatrix[,1:3])
+```
+
+```{r}
+summary(result1)
+#pweibull(11.5, 1.882, 6.736) - pweibull(0, 1.882, 6.736)
+```
+```{r}
+summary(result2)
+```
+```{r}
+summary(result3)
+```
+
+```{r}
+compareModels(list(result1, result2, result3), n_samples = 1000, 
+              batch_size = 2000)
+```
+
+
+```{r}
+simulations1 <- epidemic.simulations(result1, replicates = 50)
+simulations2 <- epidemic.simulations(result2, replicates = 50)
+simulations3 <- epidemic.simulations(result3, replicates = 50)
+
+```
+
+```{r}
+plotPosteriorPredictive = function(simulations, main)
+{
+  allSimulatedI_star = sapply(simulations$simulationResults, function(x){x$I_star})
+  
+  lowerQuantile = apply(allSimulatedI_star, 1, quantile, probs = c(0.025))
+  posteriorMean = apply(allSimulatedI_star, 1, mean)
+  upperQuantile = apply(allSimulatedI_star, 1, quantile, probs = c(0.975))
+  
+  
+  plot(us$cases, ylim = c(0, max(us$cases)*2),
+       xlab = "Epidemic Day", ylab = "New Cases", main = main)
+  lines(upperQuantile, lty = 2, col = "blue")
+  lines(lowerQuantile, lty = 2, col = "blue")
+  lines(posteriorMean, lty = 1, col = "blue")
+  
+  legend("topleft", legend = c("Mean", "95% CI", "Observed"), lty = c(1,2,0), 
+         pch = c(NA,NA,1), col = c("blue", "blue", "black"), cex = 1)
+}
+
+```
+
+```{r}
+plotPosteriorPredictive_1stwave = function(simulations, main)
+{
+  allSimulatedI_star = sapply(simulations$simulationResults, function(x){x$I_star})
+  
+  lowerQuantile = apply(allSimulatedI_star, 1, quantile, probs = c(0.025))
+  posteriorMean = apply(allSimulatedI_star, 1, mean)
+  upperQuantile = apply(allSimulatedI_star, 1, quantile, probs = c(0.975))
+  
+  
+  plot(first_wave$cases, ylim = c(0, max(first_wave$cases)*2),
+       xlab = "Epidemic Day", ylab = "New Cases", main = main)
+  lines(upperQuantile, lty = 2, col = "blue")
+  lines(lowerQuantile, lty = 2, col = "blue")
+  lines(posteriorMean, lty = 1, col = "blue")
+  
+  legend("topleft", legend = c("Mean", "95% CI", "Observed"), lty = c(1,2,0), 
+         pch = c(NA,NA,1), col = c("blue", "blue", "black"), cex = 1)
+}
+
+```
+
+
+```{r}
+plotPosteriorPredictive_2ndwave = function(simulations, main)
+{
+  allSimulatedI_star = sapply(simulations$simulationResults, function(x){x$I_star})
+  
+  lowerQuantile = apply(allSimulatedI_star, 1, quantile, probs = c(0.025))
+  posteriorMean = apply(allSimulatedI_star, 1, mean)
+  upperQuantile = apply(allSimulatedI_star, 1, quantile, probs = c(0.975))
+  
+  
+  plot(second_wave$cases, ylim = c(0, max(second_wave$cases)*2),
+       xlab = "Epidemic Day", ylab = "New Cases", main = main)
+  lines(upperQuantile, lty = 2, col = "blue")
+  lines(lowerQuantile, lty = 2, col = "blue")
+  lines(posteriorMean, lty = 1, col = "blue")
+  
+  legend("topleft", legend = c("Mean", "95% CI", "Observed"), lty = c(1,2,0), 
+         pch = c(NA,NA,1), col = c("blue", "blue", "black"), cex = 1)
+}
+
+
+
+```
+
+
+```{r}
+plotPosteriorPredictive_3rdwave = function(simulations, main)
+{
+  allSimulatedI_star = sapply(simulations$simulationResults, function(x){x$I_star})
+  
+  lowerQuantile = apply(allSimulatedI_star, 1, quantile, probs = c(0.025))
+  posteriorMean = apply(allSimulatedI_star, 1, mean)
+  upperQuantile = apply(allSimulatedI_star, 1, quantile, probs = c(0.975))
+  
+  
+  plot(second_and_third_waves$cases, ylim = c(0, max(first_and_second_wave$cases)*2),
+       xlab = "Epidemic Day", ylab = "New Cases", main = main)
+  lines(upperQuantile, lty = 2, col = "blue")
+  lines(lowerQuantile, lty = 2, col = "blue")
+  lines(posteriorMean, lty = 1, col = "blue")
+  
+  legend("topleft", legend = c("Mean", "95% CI", "Observed"), lty = c(1,2,0), 
+         pch = c(NA,NA,1), col = c("blue", "blue", "black"), cex = 1)
+}
+
+
+
+```
+
+```{r}
+plotPosteriorPredictive_future = function(simulations, rawData, main, lastTime)
+{
+  allSimulatedI_star = sapply(simulations$simulationResults, function(x){x$I_star})
+  
+  lowerQuantile = apply(allSimulatedI_star, 1, quantile, probs = c(0.025))
+  posteriorMean = apply(allSimulatedI_star, 1, mean)
+  upperQuantile = apply(allSimulatedI_star, 1, quantile, probs = c(0.975))
+  
+  
+  plot(rawData, ylim = c(0, max(rawData)*2),
+       xlab = "Epidemic Day", ylab = "New Cases", main = main,
+       col = ifelse(1:length(rawData) <= lastTime, "black", "red"))
+  lines(upperQuantile, lty = 2, col = "blue")
+  lines(lowerQuantile, lty = 2, col = "blue")
+  lines(posteriorMean, lty = 1, col = "blue")
+  
+  legend(x = 100, y = 12, legend = c("Mean", "95% CI", "Observed", "Future"), lty = c(1,2,0,0), 
+         pch = c(NA,NA,1,1), col = c("blue", "blue", "black","red"), cex = 1)
+}
+
+```
+
+```{r}
+
+#plotPosteriorPredictive_future(result1, us$cases, "Model 1: Posterior Distribution", nrow(first_wave))
+#plotPosteriorPredictive_future(result2, us$cases, "Model 1: Posterior Distribution", nrow(first_wave))
+#plotPosteriorPredictive_future(result3, us$cases, "Model 1: Posterior Distribution", nrow(first_wave))
+
+plotPosteriorPredictive(simulations1, "Model 1: Posterior Distribution")
+plotPosteriorPredictive(simulations2, "Model 1: Posterior Distribution")
+plotPosteriorPredictive(simulations3, "Model 1: Posterior Distribution")
+
+
+
+```
+
+
+
+
+
+
+```{r}
+#plotPosteriorPredictive_1stwave(simulations1, "Model 1: Posterior Predictive Distribution")
+
+plotPosteriorPredictive_1stwave(result1, "Model 1: Posterior Distribution")
+
+#plotPosteriorPredictive_1stwave(result1, "Model 1: Posterior Distribution")
+#plotPosteriorPredictive_2ndwave(result1, "Model 1: Posterior Distribution")
+#plotPosteriorPredictive_3rdwave(result1, "Model 1: Posterior Distribution")
+
+```
+
+```{r}
+plotPosteriorPredictive_1stwave(result2, "Model 1: Posterior Distribution")
+```
+```{r}
+plotPosteriorPredictive_1stwave(result3, "Model 1: Posterior Distribution")
+
+```
+```{r}
+plotPosteriorPredictive(result1, "Model 1: Posterior Distribution")
+plotPosteriorPredictive(result2, "Model 1: Posterior Distribution")
+plotPosteriorPredictive(result3, "Model 1: Posterior Distribution")
+
+
+```
+
+
+
+
+
