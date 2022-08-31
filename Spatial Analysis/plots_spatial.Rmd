@@ -9,8 +9,8 @@ date: '2022-08-25'
 
 \setlength{\leftskip}{1cm}
 
-a: Contact intensity between each pair of state borders is assumed to be different (termed distance model)
-b: Contact intensity between each pair of state borders is assumed to be the same (CAR model)
+a: Contact intensity between each pair of state borders is assumed to be different (termed distance model)  
+b: Contact intensity between each pair of state borders is assumed to be the same (CAR model)  
 c: Contact intensity between each pair of state borders is assumed to be different; the number of travelers between two locations (flow) increases with the locations' populations while decreases with the distance between them (gravity model)
 
 \setlength{\leftskip}{0cm}
