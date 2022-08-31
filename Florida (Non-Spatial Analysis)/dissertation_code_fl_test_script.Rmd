@@ -11,7 +11,6 @@ output:
 4. Fine tuning of model specifications gives differing results.....does increasing batch size, max batch size and requested samples give better results in terms of bias/variance? (investigate using best model)
 5. If possible use best model to demonstrate different runtimes for exponential distribution vs weibull distribution
 6. Use SMC-ABC to first derive working/acceptable models since this algorithm is expected to improve approximation efficiency when compared to basic ABC (when the prior(s) is diffuse to the posterior); also some package functionality such as Bayes factor derivation is only limited to simulations using SMC-ABC algorithm. Then for best model(s), using basic ABC to see if there is a significant different in results...in real world situations where prior info may not be well-known/established, SMC-ABC would clearly be more efficient, however in this analysis we use relatively informative priors (especially in terms of latent and infectious periods) so the difference between the basic algorithm and the SMC one may not be that significant!
-7. Consider showing difference in Basic ABC algorithm results (if any) using informative priors vs non-informative ones
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
@@ -245,7 +244,7 @@ exposure_model_9 = ExposureModel(cbind(1,intervention_term_1a, intervention_term
                                 nTpt = nrow(firstandsecond_wave),
                                 nLoc = 1,
                                 betaPriorPrecision = 0.5,
-                                betaPriorMean = 1)
+                                betaPriorMean = 0)
 
 exposure_model_10 = ExposureModel(cbind(1,intervention_term_1a, intervention_term_2a,reopen_date, time_basis_df_3), # decent
                                 nTpt = nrow(firstandsecond_wave),
@@ -369,11 +368,10 @@ distance_model = DistanceModel(list(matrix(0))) # considering as one state there
 ```{r}
 # reference: https://github.com/grantbrown/COVID19-US/blob/master/Templates/default.template.mortality.R
 
-# Model to describe E to I and I to R transition probabilities.
+# pick a Weibull distribution for the compartment membership time that most closely matches some reported values and use this to deduce mean latent and infectious period times
+# attach an effective sample size to this distribution using gamma hyperpriors (choose gamma distributions with the chosen mean(s) but with different variances/effective sample sizes)
+# this function maps the reported latent and infectious period times/ranges to selected quantiles of that compartment membership time
 
-# Latent period: 2-14 days with median 5
-
-# find proper reference supporting this info  ^^
 
 pickWeibullPars <- function(qdf){
   rslt <- optim(par = c(1,1), fn = function(par){
@@ -387,11 +385,13 @@ pickGammaHyperPars <- function(mean, ESS){
   a <- ESS - b          # b = event occur rate and a = number of events occurred
   c(a,b)
 }
-
+# below values using researched studies
 latent_par_means <- pickWeibullPars(qdf=data.frame(q=c(0.025,0.5,0.975),
                                                    x=c(2,5,12)))
+# latent period: approximately 2-12 days with median 5 (mean ~ 6 days)
 infectious_par_means <- pickWeibullPars(qdf = data.frame(q=c(0.025,0.5,0.975),
                                                          x = c(8,13,22)))
+# infectious period: approximately 10-24 days with median 14 (mean ~ 16 days)
 
 weibull_transition_priors <- WeibullTransitionPriors(latent_shape_prior_alpha = pickGammaHyperPars(latent_par_means[1], 1000)[1],
                                             latent_shape_prior_beta = pickGammaHyperPars(latent_par_means[1], 1000)[2],
@@ -677,8 +677,9 @@ runtime15 = system.time(result15 <- SpatialSEIRModel(data_model_vaccines,
 
 
 ```{r}
-compareModels(list(result2, result3), n_samples = 1000, 
+comps <- compareModels(list(result2, result3), n_samples = 1000, 
               batch_size = 2000)
+print(comps)
 
 # splines approach allows us to construct fexible models in the absence of structural information about the pandemic which would otherwise help inform the intensity process, such as finer spatiotemporal indexing (ie. between counties) and comprehensive data on public health efforts, among other things.....especially with florida as they never had any state mandated mask wearing protocols but this doesnt mean individuals didnt take part in mask wearing (which reduces exposure)
 
@@ -689,15 +690,18 @@ compareModels(list(result2, result3), n_samples = 1000,
 19. Get Bayes factor for model selection
 
 ```{r}
-compareModels(list(result4, result5, result6, result7, result8), n_samples = 1000, 
+comps_1 <-compareModels(list(result4, result5, result6, result7, result8), n_samples = 1000, 
               batch_size = 2000)
+print(comps_1)
 
 # model 6 best
 ```
 
 ```{r}
-compareModels(list(result9, result10, result11, result12, result13, result14), n_samples = 1000, 
+comps_2 <- compareModels(list(result9, result10, result11, result12, result13, result14), n_samples = 1000, 
               batch_size = 2000)
+print(comps_2)
+
 
 # model 11 best
 ```
@@ -747,11 +751,15 @@ get_coverage_ei = function(simulations, true_params)
 
     
   
-  a = mean(lowerQuantile <= true_params & true_params <= upperQuantile ) # should be column of quantiles
+  a = mean(lowerQuantile <= true_params & true_params <= upperQuantile ) 
+  # the ratio of times the confidence intervals overlaps the true mean gives a coverage estimate
+
   
   b = mean(upperQuantile - lowerQuantile)
   
   c = bias_per(y = true_params, yhat = posteriorMean)
+  # taking the average of all estimates subtracted from the true mean reveals bias estimate
+
   
   return(list(coverage=a, width=b, bias=c))
 
@@ -1061,8 +1069,9 @@ summary(result15)
 23. Compare models to get best model
 
 ```{r}
-compareModels(list(result6, result11), n_samples = 1000, 
+comps_3 <- compareModels(list(result6, result11), n_samples = 1000, 
               batch_size = 2000)
+print(comps_3)
 ```
 
 24. Get coverage, width and bias for best model (latent and infectious periods)
@@ -1116,8 +1125,10 @@ plotPosteriorPredictive_interventions(result6_weibull, "Model 6 (Weibull Distrib
 summary(result6_weibull)
 ```
 ```{r}
-compareModels(list(result6, result6_weibull), n_samples = 1000, 
+comps_4 <- compareModels(list(result6, result6_weibull), n_samples = 1000, 
               batch_size = 2000)
+print(comps_4)
+
 
 # weibull better
 ```
