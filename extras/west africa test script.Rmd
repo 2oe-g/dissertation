@@ -1,0 +1,303 @@
+---
+title: "west africa test script"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE}
+library(tidyverse)
+library(ABSEIR)
+
+```
+
+```{r}
+library(splines)
+
+data(WestAfrica2015)
+WestAfrica2015 = WestAfrica2015[rev(1:nrow(WestAfrica2015)),]
+timeIdx = as.Date(WestAfrica2015$Date, format = "%m/%d/%Y")
+timeIdx = as.numeric(timeIdx - min(timeIdx)) + 1
+modelIdx = 1:length(timeIdx)
+
+
+I_star = matrix(NA, nrow = max(timeIdx), ncol = 3)
+I_star[timeIdx[modelIdx], 1] = WestAfrica2015$Cases_Guinea[modelIdx]
+I_star[timeIdx[modelIdx], 2] = WestAfrica2015$Cases_Liberia[modelIdx]
+I_star[timeIdx[modelIdx], 3] = WestAfrica2015$Cases_SierraLeone[modelIdx]
+
+# Fill in initial zeros
+I_star[1:(min(which(!is.na(I_star[,2])))-1),2] <- 0
+I_star[1:(min(which(!is.na(I_star[,3])))-1),3] <- 0
+
+
+# Linearly interpolate missing data:
+I_star <- apply(I_star, 2, function(i){round(approx(1:length(i), i, n = length(i))$y)})
+
+# Make sure these make sense as cumulative counts (sometimes decreases were observed)
+currentVals = I_star[nrow(I_star),]
+for (i in (nrow(I_star)-1):1)
+{
+  badIdx = I_star[i,] > currentVals 
+  badIdx = ifelse(is.na(badIdx), FALSE, badIdx)
+  I_star[i, ] = ifelse(badIdx, currentVals, I_star[i,])
+  currentVals = ifelse(is.na(I_star[i,]), currentVals, I_star[i,])
+}
+
+# Set up starting val
+I0 <- I_star[1,]
+# Thin the data to weekly:
+I_star <- I_star[seq(2,nrow(I_star),7),]
+
+data_model = DataModel(Y = I_star,
+                       type = "identity",
+                       compartment = "I_star",
+                       cumulative = TRUE)
+```
+
+```{r}
+intercepts = diag(3)[rep(1:ncol(I_star), each = nrow(I_star)),]
+#intercepts = 1
+timeBasis = bs(1:nrow(I_star), degree = 3)[rep(1:nrow(I_star), ncol(I_star)),]
+X = cbind(intercepts, timeBasis)
+exposure_model = ExposureModel(X, nTpt = nrow(I_star),
+                               nLoc = ncol(I_star),
+                               betaPriorPrecision = 0.5,
+                               betaPriorMean = c(rep(-1, ncol(intercepts)),
+                                                 rep(0, ncol(timeBasis))))
+
+```
+```{r}
+reinfection_model = ReinfectionModel("SEIR")
+DM1 = matrix(c(0,1,0,
+               1,0,1,
+               0,1,0), nrow = 3, byrow = TRUE)
+
+distance_model = DistanceModel(list(DM1), priorAlpha = 1, priorBeta = 25)
+N = c(10057975, 4128572, 6190280)
+E0 = apply(I_star[1:4,], 2, sum, na.rm = TRUE)
+initial_value_container = InitialValueContainer(S0=N - I0 - E0,
+                                                E0 = E0,
+                                                I0 = I0,
+                                                R0 = rep(0, ncol(I_star)))
+
+transition_priors1 = ExponentialTransitionPriors(p_ei = 1-exp(-1/5), 
+                                     p_ir= 1-exp(-1/7),
+                                     p_ei_ess = 100,
+                                     p_ir_ess = 100)
+
+
+
+
+sampling_control = SamplingControl(seed = 123124, 
+                                   n_cores = 14,
+                                   algorithm="Beaumont2009",
+                                   list(batch_size = 2500,
+                                           epochs = 1e6,
+                                           #max_batches = 2000,
+                                           max_batches = 100,
+                                           shrinkage = 0.99,
+                                           multivariate_perturbation=FALSE
+                                         )
+                                   )
+
+## Exponential Results:
+system.time(result <- SpatialSEIRModel(data_model,
+                          exposure_model,
+                          reinfection_model,
+                          distance_model,
+                          transition_priors1,
+                          initial_value_container,
+                          sampling_control,
+                          samples = 50,
+                          verbose = 0))
+```
+```{r}
+sims = epidemic.simulations(result, replicates = 25)
+
+```
+
+```{r}
+summary(result)
+
+# each beta_se estimate corresponds to exposure process parameters
+# in this case, we have a simple intercept model in which each of the three nations is assumed to have a separate, constant, intensity value (first three estimates), as well as inclusion of the temporal basis splines of varying degrees of freedom (specified as degree 3)...therefore 6 total estimates
+```
+```{r}
+
+# GUINEA vs LIBERIA
+
+
+I_star_1 <-
+  I_star[,-3]
+
+# Set up starting val
+I0_1 <- I_star_1[1,]
+
+
+
+
+data_model_1 = DataModel(Y = I_star_1,
+                       type = "identity",
+                       compartment = "I_star",
+                       cumulative = TRUE)
+
+intercepts_1 = diag(2)[rep(1:ncol(I_star_1), each = nrow(I_star_1)),]
+#intercepts = 1
+timeBasis_1 = bs(1:nrow(I_star_1), degree = 2)[rep(1:nrow(I_star_1), ncol(I_star_1)),]
+X_1 = cbind(intercepts_1, timeBasis_1)
+exposure_model_1 = ExposureModel(X_1, nTpt = nrow(I_star_1),
+                               nLoc = ncol(I_star_1),
+                               betaPriorPrecision = 0.5,
+                               betaPriorMean = c(rep(-1, ncol(intercepts_1)),
+                                                 rep(0, ncol(timeBasis_1))))
+```
+```{r}
+DM2 = matrix(c(0,1,
+               1,0), nrow = 2, byrow = TRUE)
+
+distance_model_1 = DistanceModel(list(DM2), priorAlpha = 1, priorBeta = 25)
+N_1 = c(10057975, 4128572)
+E0_1 = apply(I_star_1[1:4,], 2, sum, na.rm = TRUE)
+initial_value_container_1 = InitialValueContainer(S0= N_1 - I0_1 - E0_1,
+                                                E0 = E0_1,
+                                                I0 = I0_1,
+                                                R0 = rep(0, ncol(I_star_1)))
+
+transition_priors1 = ExponentialTransitionPriors(p_ei = 1-exp(-1/5), 
+                                     p_ir= 1-exp(-1/7),
+                                     p_ei_ess = 100,
+                                     p_ir_ess = 100)
+
+
+
+
+sampling_control = SamplingControl(seed = 123124, 
+                                   n_cores = 14,
+                                   algorithm="Beaumont2009",
+                                   list(batch_size = 2500,
+                                           epochs = 1e6,
+                                           #max_batches = 2000,
+                                           max_batches = 100,
+                                           shrinkage = 0.99,
+                                           multivariate_perturbation=FALSE
+                                         )
+                                   )
+
+```
+
+```{r}
+system.time(result1 <- SpatialSEIRModel(data_model_1,
+                          exposure_model_1,
+                          reinfection_model,
+                          distance_model_1,
+                          transition_priors1,
+                          initial_value_container_1,
+                          sampling_control,
+                          samples = 50,
+                          verbose = 0))
+```
+
+```{r}
+sims = epidemic.simulations(result1, replicates = 25)
+
+```
+
+```{r}
+summary(result1)
+
+# each beta_se estimate corresponds to exposure process parameters
+# in this case, we have a simple intercept model in which each of the three nations is assumed to have a separate, constant, intensity value (first two estimates), as well as inclusion of the temporal basis splines of varying degrees of freedom (specified as degree 2)...therefore 4 total estimates
+```
+
+```{r}
+
+# LIBERIA vs SIERRA LEONE
+ 
+I_star_2 <-
+  I_star[,-1]
+
+# Set up starting val
+I0_2 <- I_star_2[1,]
+
+
+
+
+data_model_2 = DataModel(Y = I_star_2,
+                       type = "identity",
+                       compartment = "I_star",
+                       cumulative = TRUE)
+
+intercepts_2 = diag(2)[rep(1:ncol(I_star_2), each = nrow(I_star_2)),]
+#intercepts = 1
+timeBasis_2 = bs(1:nrow(I_star_2), degree = 2)[rep(1:nrow(I_star_2), ncol(I_star_2)),]
+X_2 = cbind(intercepts_2, timeBasis_2)
+exposure_model_2 = ExposureModel(X_2, nTpt = nrow(I_star_2),
+                               nLoc = ncol(I_star_2),
+                               betaPriorPrecision = 0.5,
+                               betaPriorMean = c(rep(-1, ncol(intercepts_2)),
+                                                 rep(0, ncol(timeBasis_2))))
+```
+
+```{r}
+DM3 = matrix(c(0,1,
+               1,0), nrow = 2, byrow = TRUE)
+
+distance_model_2 = DistanceModel(list(DM3), priorAlpha = 1, priorBeta = 25)
+N_2 = c(4128572,6190280)
+E0_2 = apply(I_star_2[1:4,], 2, sum, na.rm = TRUE)
+initial_value_container_2 = InitialValueContainer(S0= N_2 - I0_2 - E0_2,
+                                                E0 = E0_2,
+                                                I0 = I0_2,
+                                                R0 = rep(0, ncol(I_star_2)))
+
+transition_priors1 = ExponentialTransitionPriors(p_ei = 1-exp(-1/5), 
+                                     p_ir= 1-exp(-1/7),
+                                     p_ei_ess = 100,
+                                     p_ir_ess = 100)
+
+
+
+
+sampling_control = SamplingControl(seed = 123124, 
+                                   n_cores = 14,
+                                   algorithm="Beaumont2009",
+                                   list(batch_size = 2500,
+                                           epochs = 1e6,
+                                           #max_batches = 2000,
+                                           max_batches = 100,
+                                           shrinkage = 0.99,
+                                           multivariate_perturbation=FALSE
+                                         )
+                                   )
+
+```
+
+```{r}
+system.time(result2 <- SpatialSEIRModel(data_model_2,
+                          exposure_model_2,
+                          reinfection_model,
+                          distance_model_2,
+                          transition_priors1,
+                          initial_value_container_2,
+                          sampling_control,
+                          samples = 50,
+                          verbose = 0))
+```
+
+```{r}
+sims = epidemic.simulations(result2, replicates = 25)
+
+```
+
+```{r}
+summary(result2)
+
+# rho (spatial autocorrelation parameter estimate) is significantly higher in this case...expected because two countries share similar epidemic curve progression when compared to previous analysis of guinea vs liberia
+
+# thus, in the first analysis of all three countries, the reasonably 'high' predicted rho value of 0.446 could be attributed to shared epidemic intensity/contact rate between liberia and sierra leone, rather than the influence of guinea on these same countries.
+
+# try to get three rho estimates for first case
+```
