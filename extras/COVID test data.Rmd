@@ -1,0 +1,258 @@
+---
+title: "covid test data"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+
+
+```{r message=FALSE}
+library(tidyverse)
+library(ABSEIR)
+```
+
+## Including Plots
+
+
+```{r,message=FALSE}
+#data <-  read.csv("owid-covid-data.csv", header = TRUE, sep = ",")
+
+data <-  read.csv("https://covid.ourworldindata.org/data/owid-covid-data.csv", header = TRUE, sep = ",")
+
+
+trini <- data %>%
+  filter(iso_code == "TTO")
+
+usa <- data %>%
+  filter(iso_code == "USA")
+
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+```{r, echo=TRUE, eval=TRUE}
+
+barplot(t(trini$new_cases), main = "New Cases", xlab = "Day", ylab = "Cases")
+axis(side = 1, at = seq(0, nrow(data), 50)) 
+
+```
+```{r data, echo=TRUE, eval=TRUE}
+
+data_model = DataModel(trini$new_cases,
+                        type = "identity",
+                        compartment="I_star",
+                        cumulative=FALSE)
+
+```
+
+```{r exposure, echo=TRUE, eval=TRUE}
+
+exposure_model_1 = ExposureModel(matrix(1,nrow = nrow(trini)),
+                                  nTpt = nrow(trini),
+                                  nLoc = 1,
+                                  betaPriorPrecision = 0.5,
+                                  betaPriorMean = 0)
+```
+
+```{r}
+
+intervention_term = cumsum(trini$date >  as.Date("2020-04-25", "%Y-%m-%d")) # date when lockdown was first imposed
+
+exposure_model_2 = ExposureModel(cbind(1,intervention_term),
+                                  nTpt = nrow(trini),
+                                  nLoc = 1,
+                                  betaPriorPrecision = 0.5,
+                                  betaPriorMean = 0)
+
+```
+
+
+```{r reinfection, echo=TRUE, eval=TRUE}
+
+reinfection_model = ReinfectionModel("SEIR") # without reinfection rate
+
+```
+
+```{r distance, echo=TRUE, eval=TRUE}
+
+distance_model = DistanceModel(list(matrix(0))) # considering as one country therefore initialising with empty matrix
+
+# figure out how to incorporate distance if considering analysis of several countries...
+# https://github.com/grantbrown/ABSEIR/issues/1
+
+```
+
+```{r intial values, echo=TRUE, eval=TRUE}
+
+initial_value_container = InitialValueContainer(S0=1399488 , # population at time of first case(s)
+                                                 E0=2,
+                                                 I0=2,
+                                                 R0=0)
+
+```
+
+```{r transition priors, echo=TRUE, eval=TRUE}
+
+exp_transition_priors = ExponentialTransitionPriors(p_ei = 1-exp(-1/5), 
+                                                 p_ir= 1-exp(-1/10),
+                                                 p_ei_ess = 10,
+                                                 p_ir_ess = 10)
+
+```
+
+```{r}
+
+# Model to describe E to I and I to R transition probabilities.
+
+# Latent period: 2-14 days with median 5
+
+# find proper reference supporting this info  ^^
+
+pickWeibullPars <- function(qdf){
+  rslt <- optim(par = c(1,1), fn = function(par){
+    sum((qweibull(p = qdf$q, shape = par[1], scale = par[2]) - qdf$x)^2)
+  })
+  rslt$par
+}
+
+pickGammaHyperPars <- function(mean, ESS){
+  b <- ESS/(mean+1)     # ESS = effective sample size
+  a <- ESS - b          # b = event occur rate and a = number of events occurred
+  c(a,b)
+}
+
+latent_par_means <- pickWeibullPars(qdf=data.frame(q=c(0.025,0.5,0.975),
+                                                   x=c(2,5,14)))
+infectious_par_means <- pickWeibullPars(qdf = data.frame(q=c(0.025,0.5,0.975),
+                                                         x = c(10,14,32)))
+
+weibull_transition_priors <- WeibullTransitionPriors(latent_shape_prior_alpha = pickGammaHyperPars(latent_par_means[1], 1000)[1],
+                                            latent_shape_prior_beta = pickGammaHyperPars(latent_par_means[1], 1000)[2],
+                                            latent_scale_prior_alpha = pickGammaHyperPars(latent_par_means[2], 1000)[1],
+                                            latent_scale_prior_beta = pickGammaHyperPars(latent_par_means[2], 1000)[2],
+                                            infectious_shape_prior_alpha = pickGammaHyperPars(infectious_par_means[1], 100)[1], #less certain about infectious period...in other words we have a larger range in which one can be infectious when compared to small latent period range so we use a smaller ESS
+                                            infectious_shape_prior_beta = pickGammaHyperPars(infectious_par_means[1], 100)[2],
+                                            infectious_scale_prior_alpha = pickGammaHyperPars(infectious_par_means[2], 100)[1],
+                                            infectious_scale_prior_beta = pickGammaHyperPars(infectious_par_means[2], 100)[2])
+```
+
+
+```{r sampling control, echo=TRUE, eval=TRUE}
+
+sampling_control = SamplingControl(seed = 123123, 
+                                    n_cores = 8,
+                                    algorithm="BasicABC",
+                                    list(batch_size = 2000,
+                                         epochs = 1e6,
+                                         max_batches = 100,
+                                         shrinkage = 0.99,
+                                         multivariate_perturbation=FALSE,
+                                         keep_compartments = TRUE
+                                    )
+ )
+# algorithm="Beaumont2009" for SMC-ABC
+
+```
+
+```{r runtime and summary, echo=TRUE, eval=TRUE}
+
+#consider showing difference of weibull transition priors vs exponential transition priors
+
+runtime1 = system.time(result1 <- SpatialSEIRModel(data_model,
+                                                    exposure_model_1,
+                                                    reinfection_model,
+                                                    distance_model,
+                                                   weibull_transition_priors,
+                                                    #exp_transition_priors,
+                                                    initial_value_container,
+                                                    sampling_control,
+                                                    samples = 100,
+                                                    verbose = 0))
+
+summary(result1)
+
+# Interpretation of Beta_SE coefficients: https://github.com/grantbrown/ABSEIR/issues/17
+
+```
+
+```{r sims, echo=TRUE, eval=TRUE}
+
+simulations1 <- epidemic.simulations(result1, replicates = 50)
+
+```
+
+```{r plot, echo=TRUE, eval=TRUE}
+
+plotPosteriorPredictive = function(simulations, main)
+ {
+     allSimulatedI_star = sapply(simulations$simulationResults, function(x){x$I_star})
+     
+     lowerQuantile = apply(allSimulatedI_star, 1, quantile, probs = c(0.025))
+     posteriorMean = apply(allSimulatedI_star, 1, mean)
+     upperQuantile = apply(allSimulatedI_star, 1, quantile, probs = c(0.975))
+     
+     
+     plot(trini$new_cases, ylim = c(0, max(trini$new_cases)*2),
+          xlab = "Epidemic Day", ylab = "New Cases", main = main)
+     lines(upperQuantile, lty = 2, col = "blue")
+     lines(lowerQuantile, lty = 2, col = "blue")
+     lines(posteriorMean, lty = 1, col = "blue")
+     
+     legend(x = 100, y = 12, legend = c("Mean", "95% CI", "Observed"), lty = c(1,2,0), 
+            pch = c(NA,NA,1), col = c("blue", "blue", "black"), cex = 1)
+ }
+
+plotPosteriorPredictive(simulations1, "Model 1: Posterior Predictive Distribution")
+plotPosteriorPredictive(result1, "Model 1: Posterior Distribution")
+```
+
+```{r sims1, echo=TRUE, eval=TRUE}
+
+simulations1.R0 <- ComputeR0(simulations1, cores = 8)
+
+# takes a while to run
+
+```
+
+```{r reproductive numbers, echo=TRUE, eval=TRUE}
+
+plotR0 = function(simulations, main)
+{
+  allSimulatedEA_R0 = sapply(simulations$simulationResults, function(x){x$R_EA})
+  plot(apply(allSimulatedEA_R0, 1, mean), type = "l", ylim = c(0, 3), lwd =2,
+       ylab = "Reproductive Number", main = main)
+  lines(apply(allSimulatedEA_R0, 1, mean), lwd = 2, lty = 2, col = "blue")
+  lines(apply(allSimulatedEA_R0, 1, quantile, probs = c(0.1)), lwd = 2, lty = 2, col = "blue")
+  lines(apply(allSimulatedEA_R0, 1,  quantile, probs = c(0.9)), lwd = 2, lty = 2, col = "blue")
+}
+plotR0(simulations1.R0, "Model 1: EA-R(t)")
+
+```
+
+```{r hist, echo=TRUE, eval=TRUE}
+
+p1 <- as.data.frame(result1$param.samples)
+
+hist(exp(p1$Beta_SE_1)/p1$gamma_IR, main= "Model 1 R0 - Posterior Samples")
+
+# compare two places with similar curves and one which is different; run code and see if autocorrelation is similar for two similar cities and different for different one...read documentation 
+```
+
+```{r}
+data(measlesWeserEms)
+# Identify cases
+cases<-measlesWeserEms@observed
+epidemic.start = min(which(apply(cases, 1, max) > 0))
+cases = cases[(epidemic.start-1):nrow(cases),]
+```
+
+
+
+
