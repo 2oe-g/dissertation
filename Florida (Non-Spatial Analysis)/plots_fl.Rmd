@@ -35,7 +35,7 @@ Associated RData file (fl_results.RData) can be downloaded at: https://mega.nz/f
 knitr::opts_chunk$set(echo = FALSE)
 ```
 
-```{r}
+```{r, warning=FALSE, results='hide',message=FALSE}
 library(ABSEIR)
 library(forestmangr)
 library(dplyr)
@@ -43,7 +43,7 @@ library(tidyverse)
 ```
 
 ```{r}
-load("./fl.RData")
+load("./fl_results.RData")
 ```
 
 
@@ -307,7 +307,7 @@ eta_m3_wei_SMC <- exposure_model_3$X %*% t(result3_weibull$param.samples[,beta_i
  plot(apply(eta_m3, 1, mean), 
       type = 'l', 
       col="blue",
-      main = 'Intensity Prediction',
+      main = 'Model 6 Intensity Prediction',
       ylab = 'Intensity (Eta)',
       xlab = 'Epidemic Day',
       ylim = c(min(eta_m3,eta_m3_exp_basic,eta_m3_wei_basic,eta_m3_wei_SMC), max(eta_m3,eta_m3_exp_basic,eta_m3_wei_basic,eta_m3_wei_SMC)*1.5))
