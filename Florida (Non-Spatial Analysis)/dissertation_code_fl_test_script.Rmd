@@ -375,7 +375,8 @@ distance_model = DistanceModel(list(matrix(0))) # considering as one state there
 
 pickWeibullPars <- function(qdf){
   rslt <- optim(par = c(1,1), fn = function(par){
-    sum((qweibull(p = qdf$q, shape = par[1], scale = par[2]) - qdf$x)^2)
+    sum((qweibull(p = qdf$q, shape = par[1], scale = par[2]) - qdf$x)^2) # estimates the parameters of weibull distribution given its 
+                                                                            # (0.025 and 0.975) quantiles...squared difference
   })
   rslt$par
 }
@@ -387,11 +388,13 @@ pickGammaHyperPars <- function(mean, ESS){
 }
 # below values using researched studies
 latent_par_means <- pickWeibullPars(qdf=data.frame(q=c(0.025,0.5,0.975),
-                                                   x=c(2,5,12)))
-# latent period: approximately 2-12 days with median 5 (mean ~ 6 days)
+                                                   x=c(2,5,12)))  #picks means of shape and scale of latent period
+# latent period: approximately 2-12 days with median 5 (mean ~ 6 days) 
+# 95% LB = 2.188560, UB = 6.521399
 infectious_par_means <- pickWeibullPars(qdf = data.frame(q=c(0.025,0.5,0.975),
-                                                         x = c(8,13,22)))
+                                                         x = c(8,13,22))) #picks means of shape and scale infectious period
 # infectious period: approximately 10-24 days with median 14 (mean ~ 16 days)
+# 95% LB = 4.412692, UB = 15.835367
 
 weibull_transition_priors <- WeibullTransitionPriors(latent_shape_prior_alpha = pickGammaHyperPars(latent_par_means[1], 1000)[1],
                                             latent_shape_prior_beta = pickGammaHyperPars(latent_par_means[1], 1000)[2],
@@ -405,21 +408,45 @@ weibull_transition_priors <- WeibullTransitionPriors(latent_shape_prior_alpha = 
 
 ```{r}
 
+# https://github.com/grantbrown/ABSEIR/blob/master/R/transitionPriors.R
+
+# alpha^lat ~ gamma(shape = 686.3788, rate = 313.6212) which maps probability of latent period shape being between 2.08 and 2.29
+# take the min of these two values as it will provide the broadest range of possible values for the E to I transition!....with increasing shape values weibull distribution tends to get more narrow
+# recall that scale = 1/rate
+
 weibull_alpha_latent = qgamma(0.1, weibull_transition_priors$latent_shape_prior_alpha,
                         weibull_transition_priors$latent_shape_prior_beta) #minEIShape
- 
+
+
+# beta^lat ~ gamma(shape = 867.046, rate = 132.954) which maps probability of latent period shape being between 6.24 and 6.81
+# take the max of these two values as it will provide the broadest range of possible values for the E to I transition!....with decreasing scale values weibull distribution tends to get more narrow
+
 weibull_beta_latent = qgamma(0.9, weibull_transition_priors$latent_scale_prior_alpha,
                         weibull_transition_priors$latent_scale_prior_beta) #maxEIScale
 
+# alpha^inf ~ gamma(shape = 81.5249, rate = 18.4751) which maps probability of latent period shape being between 3.79 and 5.05
+
 weibull_alpha_infectious = qgamma(0.1, weibull_transition_priors$infectious_shape_prior_alpha,
                         weibull_transition_priors$infectious_shape_prior_beta) #minIRShape
+
+# beta^inf ~ gamma(shape = 94.06012, rate = 5.939876) which maps probability of latent period shape being between 13.78 and 17.96
  
 weibull_beta_infectious = qgamma(0.9, weibull_transition_priors$infectious_scale_prior_alpha,
                         weibull_transition_priors$infectious_scale_prior_beta) #maxIRScale
 
-pweibull(10, shape = weibull_alpha_latent, scale = weibull_beta_latent) # (prior) probability individual will transition from exposed to infectious within 10 days
+df_latent <- 
+  tibble(
+    x = seq(0,20,l=100)) %>%
+      mutate(y = dweibull(x, shape=weibull_alpha_latent, scale = weibull_beta_latent))
 
-pweibull(14, shape = weibull_alpha_infectious, scale = weibull_beta_infectious) # (prior) probability individual will transition from infectious to removed within two weeks
+df_infectious <- 
+  tibble(
+    x = seq(0,33,l=1000)) %>%
+      mutate(y = dweibull(x, shape=weibull_alpha_infectious, scale = weibull_beta_infectious))
+
+#pweibull(10, shape = weibull_alpha_latent, scale = weibull_beta_latent) # (prior) probability individual will transition from exposed to infectious within 10 days
+
+#pweibull(14, shape = weibull_alpha_infectious, scale = weibull_beta_infectious) # (prior) probability individual will transition from infectious to removed within two weeks
 
 weibull_beta_latent * gamma(1 + 1/weibull_alpha_latent) # mean latent period
 weibull_beta_infectious * gamma(1 + 1/weibull_alpha_infectious) # mean infectious period
@@ -427,33 +454,118 @@ weibull_beta_infectious * gamma(1 + 1/weibull_alpha_infectious) # mean infectiou
 weibull_beta_latent*(ln(2))^(1/weibull_alpha_latent) # median latent period
 weibull_beta_infectious*(ln(2))^(1/weibull_alpha_infectious) # median infectious period
 
+qweibull(0.95,shape = weibull_alpha_latent, scale = weibull_beta_latent)
+qweibull(0.95,shape = weibull_alpha_infectious, scale = weibull_beta_infectious)
 
 #sqrt((scale^2) * (gamma(1 + 2/shape) - gamma(1 + 1/shape)^2)) # sd
 ```
 
 ```{r}
+# reference: https://stackoverflow.com/questions/69121598/given-the-probability-find-y-for-gamma-distribution
+
 # latent period
 
-curve(dweibull(x, shape=weibull_alpha_latent, scale = weibull_beta_latent), from=0, to=22, xlab = "Days", ylab = "Probability")
+ggplot(df_latent,aes(x,y)) + 
+  ggtitle("Latent Period (Weibull Distribution)") +
+  xlab("Days") + ylab("Probability Density") +
+  geom_function(fun = dweibull, args = list(shape = weibull_alpha_latent, scale = weibull_beta_latent))+
+  geom_vline(xintercept = qweibull(0.95, shape = weibull_alpha_latent, scale = weibull_beta_latent), linetype = "dashed", col = "blue")+
+  geom_vline(xintercept = qweibull(0.5, shape = weibull_alpha_latent, scale = weibull_beta_latent), linetype = "dashed", col = "darkorchid")+
+  geom_vline(xintercept = weibull_beta_latent * gamma(1 + 1/weibull_alpha_latent), linetype = "solid", col = "red")+  
+  theme_bw()+
+  #scale_x_continuous(round(qweibull(0.95,shape = weibull_alpha_latent, scale = weibull_beta_latent),2))+
+  geom_area(data = df_latent %>% filter(x <= qweibull(0.95,shape = weibull_alpha_latent, scale = weibull_beta_latent)),
+            alpha = .7, fill = "bisque")+
+  scale_y_continuous(expand = c(0,0))+
+  annotate(geom = "text",x = 6,y =0.05,label = "95%",size = 8) 
 ```
 
 ```{r}
 # infectious period
 
-curve(dweibull(x, shape=weibull_alpha_infectious, scale = weibull_beta_infectious), from=0, to=35,xlab = "Days", ylab = "Probability")
+ggplot(df_infectious,aes(x,y)) + 
+  ggtitle("Infectious Period (Weibull Distribution)") +
+  xlab("Days") + ylab("Probability Density") +
+  geom_function(fun = dweibull, args = list(shape = weibull_alpha_infectious, scale = weibull_beta_infectious))+
+  geom_vline(xintercept = qweibull(0.95, shape = weibull_alpha_infectious, scale = weibull_beta_infectious), linetype = "dashed", col = "blue")+
+  geom_vline(xintercept = qweibull(0.5, shape = weibull_alpha_infectious, scale = weibull_beta_infectious), linetype = "dashed", col = "darkorchid")+
+  geom_vline(xintercept = weibull_beta_infectious * gamma(1 + 1/weibull_alpha_infectious), linetype = "solid", col = "red")+
+  theme_bw()+
+  #scale_x_continuous(breaks = round(qweibull(0.95,shape = weibull_alpha_infectious, scale = weibull_beta_infectious),2))+
+  geom_area(data = df_infectious %>% filter(x <= qweibull(0.95,shape = weibull_alpha_infectious, scale = weibull_beta_infectious)),
+            alpha = .7, fill = "bisque")+
+  scale_y_continuous(expand = c(0,0))+
+  annotate(geom = "text",x = 16.5,y =0.03,label = "95%",size = 8) 
 ```
 16. Set up exponential distribution for transition priors
 
 ```{r}
 exp_transition_priors = ExponentialTransitionPriors(p_ei = 1-exp(-1/6),    # cdf of exponential dist...dont have actual value of gamma so estimate 
-                                                    p_ir= 1-exp(-1/16),    # using mean (gamma) = 1/days......exp(rate parameter = 1/6)
+                                                    p_ir= 1-exp(-1/16),    # using mean (period) = 1/gamma => gamma = 1/mean(period)
+                                                    #......exp(rate parameter = 1/6, ie. mean = 6)
                                                     p_ei_ess = 1000,        # more informative as 1000 > 100
                                                     p_ir_ess = 100)
-  # 1-exp(-gamma) = p_ei is transition prob and 1/gamma is the mean period
+# 1-exp(-gamma) = p_ei is transition prob and 1/gamma is the mean period
+# this gives a mean latent period of 6 days and a median of approximately 4.16 days
+# mean infectious period of 16 days and a median of approximately 11.1 days
 
 
 # use best three models for each differing timelines...one that gives closest estimate to provided mean periods = run with weibull for comparison
 ```
+
+```{r}
+
+df_explat <- 
+  tibble(
+    x = seq(0,25,l=100)) %>%
+      mutate(y = dexp(x, rate = 1/6))
+
+df_expinf <- 
+  tibble(
+    x = seq(0,50,l=1000)) %>%
+      mutate(y = dexp(x, rate = 1/16))
+
+# reference: https://stackoverflow.com/questions/69121598/given-the-probability-find-y-for-gamma-distribution
+
+# latent period
+
+ggplot(df_explat,aes(x,y)) + 
+  ggtitle("Latent Period (Exponential Distribution)") +
+  xlab("Days") + ylab("Probability Density") +
+  geom_function(fun = dexp, args = list(rate=1/6))+
+  geom_vline(xintercept = qexp(0.95, rate=1/6), linetype = "dashed", col = "blue")+
+  geom_vline(xintercept = qexp(0.5, rate=1/6), linetype = "dashed", col = "darkorchid")+
+  geom_vline(xintercept = 6, linetype = "solid", col = "red")+  
+  theme_bw()+
+  geom_area(data = df_explat %>% filter(x <= qexp(0.95,rate=1/6)),
+            alpha = .7, fill = "bisque")+
+  scale_y_continuous(expand = c(0,0))+
+  annotate(geom = "text",x = 2,y =0.03,label = "95%",size = 8) 
+
+# 95% persons go from E to I within 17.97439 days
+# median of 4.16
+# mean of 6
+```
+
+```{r}
+ggplot(df_expinf,aes(x,y)) + 
+  ggtitle("Infectious Period (Exponential Distribution)") +
+  xlab("Days") + ylab("Probability Density") +
+  geom_function(fun = dexp, args = list(rate=1/16))+
+  geom_vline(xintercept = qexp(0.95, rate=1/16), linetype = "dashed", col = "blue")+
+  geom_vline(xintercept = qexp(0.5, rate=1/16), linetype = "dashed", col = "darkorchid")+
+  geom_vline(xintercept = 16, linetype = "solid", col = "red")+  
+  theme_bw()+
+  geom_area(data = df_expinf %>% filter(x <= qexp(0.95,rate=1/16)),
+            alpha = .7, fill = "bisque")+
+  scale_y_continuous(expand = c(0,0))+
+  annotate(geom = "text",x = 6,y =0.02,label = "95%",size = 8) 
+
+# 95% persons go from E to I within 47.93172 days
+# median of 11.09035
+# mean of 16
+```
+
 
 17. Set up sampling control
 
@@ -535,6 +647,37 @@ runtime3 = system.time(result3 <- SpatialSEIRModel(data_model,
                                                     sampling_control_SMC,
                                                     samples = 100,
                                                     verbose = 2))
+runtime3_weibull = system.time(result3_weibull <- SpatialSEIRModel(data_model,
+                                                    exposure_model_3,
+                                                    reinfection_model,
+                                                    distance_model,
+                                                   weibull_transition_priors,
+                                                    #exp_transition_priors,
+                                                    initial_values,
+                                                    sampling_control_SMC,
+                                                    samples = 100,
+                                                    verbose = 2))
+runtime3_exp_basic = system.time(result3_exp_basic <- SpatialSEIRModel(data_model,
+                                                    exposure_model_3,
+                                                    reinfection_model,
+                                                    distance_model,
+                                                   #weibull_transition_priors,
+                                                    exp_transition_priors,
+                                                    initial_values,
+                                                    sampling_control_basic,
+                                                    samples = 100,
+                                                    verbose = 2))
+runtime3_weibull_basic = system.time(result3_weibull_basic <- SpatialSEIRModel(data_model,
+                                                    exposure_model_3,
+                                                    reinfection_model,
+                                                    distance_model,
+                                                   weibull_transition_priors,
+                                                    #exp_transition_priors,
+                                                    initial_values,
+                                                    sampling_control_basic,
+                                                    samples = 100,
+                                                    verbose = 2))
+
 ```
 
 
@@ -677,13 +820,15 @@ runtime15 = system.time(result15 <- SpatialSEIRModel(data_model_vaccines,
 
 
 ```{r}
-comps <- compareModels(list(result2, result3), n_samples = 1000, 
+comps <- compareModels(list(result2, result3, result3_weibull), n_samples = 1000, 
               batch_size = 2000)
 print(comps)
 
-# splines approach allows us to construct fexible models in the absence of structural information about the pandemic which would otherwise help inform the intensity process, such as finer spatiotemporal indexing (ie. between counties) and comprehensive data on public health efforts, among other things.....especially with florida as they never had any state mandated mask wearing protocols but this doesnt mean individuals didnt take part in mask wearing (which reduces exposure)
+# splines approach allows us to construct flexible models in the absence of structural information about the pandemic which would otherwise help inform the intensity process, such as finer spatiotemporal indexing (ie. between counties) and comprehensive data on public health efforts, among other things.....especially with florida as they never had any state mandated mask wearing protocols but this doesnt mean individuals didnt take part in mask wearing (which reduces exposure)
 
 # If these (current eps) are dramatically different, this approach may produce misleading results.
+
+# weibull under SMC is best
 
 ```
 
@@ -711,6 +856,12 @@ print(comps_2)
 simulations1 <- epidemic.simulations(result1, replicates = 50)
 simulations2 <- epidemic.simulations(result2, replicates = 50)
 simulations3 <- epidemic.simulations(result3, replicates = 50)
+simulations3_weibull <- epidemic.simulations(result3_weibull, replicates = 50)
+simulations3_exp_basic <- epidemic.simulations(result3_exp_basic, replicates = 50)
+simulations3_weibull_basic <- epidemic.simulations(result3_weibull_basic, replicates = 50)
+
+
+
 ```
 
 ```{r}
@@ -736,8 +887,6 @@ simulations14 <- epidemic.simulations(result14, replicates = 50)
 simulations15 <- epidemic.simulations(result15, replicates = 50)
 
 ```
-
-
 
 
 ```{r}
@@ -856,6 +1005,170 @@ plotPosteriorPredictive_vaccines = function(simulations, main)
 
 ```
 
+```{r}
+plotPosteriorPredictive_compare_t1 = function(m1, m2, m3, main)  
+{
+  allSimulatedI_star_m1 = sapply(m1$simulationResults, function(x){x$I_star})
+  
+  lowerQuantile_m1 = apply(allSimulatedI_star_m1, 1, quantile, probs = c(0.025))
+  posteriorMean_m1 = apply(allSimulatedI_star_m1, 1, mean)
+  upperQuantile_m1 = apply(allSimulatedI_star_m1, 1, quantile, probs = c(0.975))
+  
+  allSimulatedI_star_m2 = sapply(m2$simulationResults, function(x){x$I_star})
+  
+  lowerQuantile_m2= apply(allSimulatedI_star_m2, 1, quantile, probs = c(0.025))
+  posteriorMean_m2 = apply(allSimulatedI_star_m2, 1, mean)
+  upperQuantile_m2 = apply(allSimulatedI_star_m2, 1, quantile, probs = c(0.975))
+  
+  allSimulatedI_star_m3 = sapply(m3$simulationResults, function(x){x$I_star})
+  
+  lowerQuantile_m3 = apply(allSimulatedI_star_m3, 1, quantile, probs = c(0.025))
+  posteriorMean_m3= apply(allSimulatedI_star_m3, 1, mean)
+  upperQuantile_m3 = apply(allSimulatedI_star_m3, 1, quantile, probs = c(0.975))
+  
+  
+  plot(first_wave$cases, ylim = c(0, max(posteriorMean_m1,posteriorMean_m2,
+                                                  posteriorMean_m3)*1.75),
+       xlab = "Epidemic Day", ylab = "New Cases", main = main)
+  
+  lines(upperQuantile_m1, lty = 2, col = "chartreuse2")
+  lines(lowerQuantile_m1, lty = 2, col = "chartreuse2")
+  lines(posteriorMean_m1, lty = 1, col = "chartreuse2")
+  
+  lines(upperQuantile_m2, lty = 2, col = "red")
+  lines(lowerQuantile_m2, lty = 2, col = "red")
+  lines(posteriorMean_m2, lty = 1, col = "red")
+  
+  lines(upperQuantile_m3, lty = 2, col = "blue")
+  lines(lowerQuantile_m3, lty = 2, col = "blue")
+  lines(posteriorMean_m3, lty = 1, col = "blue")
+  
+  legend("topleft", legend = c("Mean", "95% CI", "Observed", "Model 1", "Model 2",
+                               "Model 3"), 
+         lty = c(1,2,0,1,1,1), 
+         pch = c(NA,NA,1,NA,NA,NA), col = c("black", "black", "black", "chartreuse2", "red", "blue"), cex = 1)
+}
+
+```
+
+```{r}
+plotPosteriorPredictive_compare_t1_alg = function(simulations_exp_SMC, simulations_wei_SMC, 
+                                                  simulations_exp_basic, simulations_wei_basic, main)  
+{
+   allSimulatedI_star_exp_SMC = sapply(simulations_exp_SMC$simulationResults, function(x){x$I_star})
+  
+  lowerQuantile_exp_SMC = apply(allSimulatedI_star_exp_SMC, 1, quantile, probs = c(0.025))
+  posteriorMean_exp_SMC = apply(allSimulatedI_star_exp_SMC, 1, mean)
+  upperQuantile_exp_SMC = apply(allSimulatedI_star_exp_SMC, 1, quantile, probs = c(0.975))
+  
+  allSimulatedI_star_wei_SMC = sapply(simulations_wei_SMC$simulationResults, function(x){x$I_star})
+  
+  lowerQuantile_wei_SMC = apply(allSimulatedI_star_wei_SMC, 1, quantile, probs = c(0.025))
+  posteriorMean_wei_SMC = apply(allSimulatedI_star_wei_SMC, 1, mean)
+  upperQuantile_wei_SMC = apply(allSimulatedI_star_wei_SMC, 1, quantile, probs = c(0.975))
+  
+  allSimulatedI_star_exp_basic = sapply(simulations_exp_basic$simulationResults, function(x){x$I_star})
+  
+  lowerQuantile_exp_basic = apply(allSimulatedI_star_exp_basic, 1, quantile, probs = c(0.025))
+  posteriorMean_exp_basic = apply(allSimulatedI_star_exp_basic, 1, mean)
+  upperQuantile_exp_basic = apply(allSimulatedI_star_exp_basic, 1, quantile, probs = c(0.975))
+  
+  allSimulatedI_star_wei_basic = sapply(simulations_wei_basic$simulationResults, function(x){x$I_star})
+  
+  lowerQuantile_wei_basic = apply(allSimulatedI_star_wei_basic, 1, quantile, probs = c(0.025))
+  posteriorMean_wei_basic = apply(allSimulatedI_star_wei_basic, 1, mean)
+  upperQuantile_wei_basic = apply(allSimulatedI_star_wei_basic, 1, quantile, probs = c(0.975))
+  
+  
+  plot(first_wave$cases, ylim = c(0, max(posteriorMean_exp_SMC,posteriorMean_wei_SMC,
+                                                  posteriorMean_exp_basic,posteriorMean_wei_basic)*1.75),
+       xlab = "Epidemic Day", ylab = "New Cases", main = main)
+  
+  lines(upperQuantile_exp_SMC, lty = 2, col = "blue")
+  lines(lowerQuantile_exp_SMC, lty = 2, col = "blue")
+  lines(posteriorMean_exp_SMC, lty = 1, col = "blue")
+  
+  lines(upperQuantile_wei_SMC, lty = 2, col = "red")
+  lines(lowerQuantile_wei_SMC, lty = 2, col = "red")
+  lines(posteriorMean_wei_SMC, lty = 1, col = "red")
+  
+  lines(upperQuantile_exp_basic, lty = 2, col = "chartreuse2")
+  lines(lowerQuantile_exp_basic, lty = 2, col = "chartreuse2")
+  lines(posteriorMean_exp_basic, lty = 1, col = "chartreuse2")
+  
+  lines(upperQuantile_wei_basic, lty = 2, col = "darkgoldenrod1")
+  lines(lowerQuantile_wei_basic, lty = 2, col = "darkgoldenrod1")
+  lines(posteriorMean_wei_basic, lty = 1, col = "darkgoldenrod1")
+  
+  
+  legend("topleft", legend = c("Mean", "95% CI", "Observed", "Exponential (SMC)", "Weibull (SMC)",
+                               "Exponential (Basic)", "Weibull (Basic)"), 
+         lty = c(1,2,0,1,1,1,1), 
+         pch = c(NA,NA,1,NA,NA,NA,NA), col = c("black", "black", "black", "blue", "red", "chartreuse2", "darkgoldenrod1"), cex = 1)
+}
+
+```
+
+```{r}
+plotPosteriorPredictive_compare_t2 = function(simulations_exp_SMC, simulations_wei_SMC, simulations_exp_basic, 
+                                           simulations_wei_basic, main)  
+{
+  allSimulatedI_star_exp_SMC = sapply(simulations_exp_SMC$simulationResults, function(x){x$I_star})
+  
+  lowerQuantile_exp_SMC = apply(allSimulatedI_star_exp_SMC, 1, quantile, probs = c(0.025))
+  posteriorMean_exp_SMC = apply(allSimulatedI_star_exp_SMC, 1, mean)
+  upperQuantile_exp_SMC = apply(allSimulatedI_star_exp_SMC, 1, quantile, probs = c(0.975))
+  
+  allSimulatedI_star_wei_SMC = sapply(simulations_wei_SMC$simulationResults, function(x){x$I_star})
+  
+  lowerQuantile_wei_SMC = apply(allSimulatedI_star_wei_SMC, 1, quantile, probs = c(0.025))
+  posteriorMean_wei_SMC = apply(allSimulatedI_star_wei_SMC, 1, mean)
+  upperQuantile_wei_SMC = apply(allSimulatedI_star_wei_SMC, 1, quantile, probs = c(0.975))
+  
+  allSimulatedI_star_exp_basic = sapply(simulations_exp_basic$simulationResults, function(x){x$I_star})
+  
+  lowerQuantile_exp_basic = apply(allSimulatedI_star_exp_basic, 1, quantile, probs = c(0.025))
+  posteriorMean_exp_basic = apply(allSimulatedI_star_exp_basic, 1, mean)
+  upperQuantile_exp_basic = apply(allSimulatedI_star_exp_basic, 1, quantile, probs = c(0.975))
+  
+  allSimulatedI_star_wei_basic = sapply(simulations_wei_basic$simulationResults, function(x){x$I_star})
+  
+  lowerQuantile_wei_basic = apply(allSimulatedI_star_wei_basic, 1, quantile, probs = c(0.025))
+  posteriorMean_wei_basic = apply(allSimulatedI_star_wei_basic, 1, mean)
+  upperQuantile_wei_basic = apply(allSimulatedI_star_wei_basic, 1, quantile, probs = c(0.975))
+  
+  
+  plot(firstandsecond_wave$cases, ylim = c(0, max(posteriorMean_exp_SMC,posteriorMean_wei_SMC,
+                                                  posteriorMean_exp_basic,posteriorMean_wei_basic)*1.75),
+       xlab = "Epidemic Day", ylab = "New Cases", main = main)
+  
+  lines(upperQuantile_exp_SMC, lty = 2, col = "blue")
+  lines(lowerQuantile_exp_SMC, lty = 2, col = "blue")
+  lines(posteriorMean_exp_SMC, lty = 1, col = "blue")
+  
+  lines(upperQuantile_wei_SMC, lty = 2, col = "red")
+  lines(lowerQuantile_wei_SMC, lty = 2, col = "red")
+  lines(posteriorMean_wei_SMC, lty = 1, col = "red")
+  
+  lines(upperQuantile_exp_basic, lty = 2, col = "chartreuse2")
+  lines(lowerQuantile_exp_basic, lty = 2, col = "chartreuse2")
+  lines(posteriorMean_exp_basic, lty = 1, col = "chartreuse2")
+  
+  lines(upperQuantile_wei_basic, lty = 2, col = "darkgoldenrod1")
+  lines(lowerQuantile_wei_basic, lty = 2, col = "darkgoldenrod1")
+  lines(posteriorMean_wei_basic, lty = 1, col = "darkgoldenrod1")
+  
+  
+  legend("topleft", legend = c("Mean", "95% CI", "Observed", "Exponential (SMC)", "Weibull (SMC)",
+                               "Exponential (Basic)", "Weibull (Basic)"), 
+         lty = c(1,2,0,1,1,1,1), 
+         pch = c(NA,NA,1,NA,NA,NA,NA), col = c("black", "black", "black", "blue", "red", "chartreuse2", "darkgoldenrod1"), cex = 1)
+}
+
+```
+
+
+
 20. Plot posterior distributions and posterior predictive distributions
 
 ```{r}
@@ -956,29 +1269,97 @@ plotPosteriorPredictive_vaccines(result15, "Model 15: Posterior Distribution")
 # use vaccines for spatial case only
 ```
 
+```{r}
+plotPosteriorPredictive_compare_t1(simulations1,simulations2,simulations3,"Posterior Predictive Distribution: Model 1 vs Model 2 vs Model 3")
+plotPosteriorPredictive_compare_t1(result1,result2,result3,"Posterior Distribution: Model 1 vs Model 2 vs Model 3")
+
+# rate of infection predicted to be slower under the unconstrained growth model but infection increases exponentially...under intervention models the rate is faster but is slowed due to the interventions such that exponential growth is utlimately avoided
+# surge of cases start developing around day 18...constant intensity assumed before day 16 afterwhich intensity decreases in a piecewise linear manner...hence decrease in exposure w
+```
+
+```{r}
+plotPosteriorPredictive_compare_t1_alg(simulations3,simulations3_weibull,simulations3_exp_basic,simulations3_weibull_basic,"Posterior Predictive Distribution: Model 3")
+plotPosteriorPredictive_compare_t1_alg(result3,result3_weibull,result3_exp_basic, result3_weibull_basic,"Posterior Distribution: Model 3")
+
+# rate of infection predicted to be slower under the unconstrained growth model but infection increases exponentially...under intervention models the rate is faster but is slowed due to the interventions such that exponential growth is ultimately avoided
+# surge of cases start developing around day 18...constant intensity assumed before day 16 afterwhich intensity decreases in a piecewise linear manner...hence decrease in exposure and overall rate of spread such that rate of new infections slows down
+
+```
+
+
 21. Plot intensity predictions for models
 
 ```{r}
+beta_idx_m1 <- grepl("Beta_SE", colnames(result1$param.samples)) # use to get beta estimates/samples
+eta_m1 <- exposure_model_1$X %*% t(result1$param.samples[,beta_idx_m1]) # get intensity matrix/time series (X(se) x Beta(se))
+
+beta_idx_m2 <- grepl("Beta_SE", colnames(result2$param.samples)) # use to get beta estimates/samples
+eta_m2 <- exposure_model_2$X %*% t(result2$param.samples[,beta_idx_m2]) # get intensity matrix/time series (X(se) x Beta(se))
+
 beta_idx_m3 <- grepl("Beta_SE", colnames(result3$param.samples)) # use to get beta estimates/samples
 eta_m3 <- exposure_model_3$X %*% t(result3$param.samples[,beta_idx_m3]) # get intensity matrix/time series (X(se) x Beta(se))
  
- plot(apply(eta_m3, 1, mean), 
+ plot(apply(eta_m1, 1, mean), 
       type = 'l', 
-      main = 'Model 3 Intensity Prediction',
+      col="chartreuse2",
+      main = 'Intensity Prediction',
       ylab = 'η',
-      xlab = 'Epidemic Day')
+      xlab = 'Epidemic Day',
+      ylim = c(min(eta_m1,eta_m2,eta_m3), max(eta_m1,eta_m2,eta_m3)*1.5))
+ lines(apply(eta_m2, 1, mean), lty = 1, col = "red")
+ lines(apply(eta_m3, 1, mean), lty = 1, col = "blue")
+ 
+ legend("bottomleft", legend = c("Model 1", "Model 2",
+                               "Model 3"), 
+         lty = c(1,1,1,1), col = c("chartreuse2", "red", "blue"))
+
+
  
  # drives the I_star compartment
+ # ignoring intervention info results in biased estimates of intensity parameters.....model 1 (no intervention) implies a less infectious epidemic process (mean -1.290) when compared to models 2 (mean 0.055) and 3 (mean 0.692).....model 3 is best because it includes two interventions and implies a more accurate (intense) infectious epidemic process
+```
+
+```{r}
+beta_idx_m3_exp_basic  <- grepl("Beta_SE", colnames(result3_exp_basic$param.samples)) # use to get beta estimates/samples
+eta_m3_exp_basic <- exposure_model_3$X %*% t(result3_exp_basic$param.samples[,beta_idx_m3_exp_basic]) # get intensity matrix/time series (X(se) x Beta(se))
+
+beta_idx_m3_wei_basic  <- grepl("Beta_SE", colnames(result3_weibull_basic$param.samples)) # use to get beta estimates/samples
+eta_m3_wei_basic <- exposure_model_3$X %*% t(result3_weibull_basic$param.samples[,beta_idx_m3_wei_basic]) # get intensity matrix/time series (X(se) x Beta(se))
+
+beta_idx_m3_wei_SMC <- grepl("Beta_SE", colnames(result3_weibull$param.samples)) # use to get beta estimates/samples
+eta_m3_wei_SMC <- exposure_model_3$X %*% t(result3_weibull$param.samples[,beta_idx_m3_wei_SMC]) # get intensity matrix/time series (X(se) x Beta(se))
+ 
+ plot(apply(eta_m3, 1, mean), 
+      type = 'l', 
+      col="blue",
+      main = 'Intensity Prediction',
+      ylab = 'η',
+      xlab = 'Epidemic Day',
+      ylim = c(min(eta_m3,eta_m3_exp_basic,eta_m3_wei_basic,eta_m3_wei_SMC), max(eta_m3,eta_m3_exp_basic,eta_m3_wei_basic,eta_m3_wei_SMC)*1.5))
+ lines(apply(eta_m3_wei_SMC, 1, mean), lty = 1, col = "red")
+ lines(apply(eta_m3_exp_basic, 1, mean), lty = 1, col = "chartreuse2")
+  lines(apply(eta_m3_wei_basic, 1, mean), lty = 1, col = "darkgoldenrod1")
+
+ 
+ 
+ 
+ legend("bottomleft", legend = c("Exponential (SMC)", "Weibull (SMC)",
+                               "Exponential (Basic)", "Weibull (Basic)"), 
+         lty = c(1,1,1,1), col = c("blue", "red", "chartreuse2", "darkgoldenrod1"))
+
+
+ 
+ # weibull (SMC) predicts a much different intensity after the second intervention such that the gradient of the line is decreasing at a slower rate when compared to the other models; in particular, there is a more drastic shift when compared to the gradient in the previous timepoints.....hence the model predicts that the second intervention most probably resulted in an increase in epidemic intensity (when compared to the days before); either this or there was some other unaccounted factor which saw this increase
 ```
 
 ```{r}
 
-beta_idx_m6 <- grepl("Beta_SE", colnames(result6$param.samples)) # use to get beta estimates/samples
-eta_m6 <- exposure_model_6$X %*% t(result6$param.samples[,beta_idx_m6]) # get intensity matrix/time series (X(se) x Beta(se))
+beta_idx_m4 <- grepl("Beta_SE", colnames(result4$param.samples)) # use to get beta estimates/samples
+eta_m4 <- exposure_model_4$X %*% t(result4$param.samples[,beta_idx_m4]) # get intensity matrix/time series (X(se) x Beta(se))
  
- plot(apply(eta_m6, 1, mean), 
+ plot(apply(eta_m4, 1, mean), 
       type = 'l', 
-      main = 'Model 6 Intensity Prediction',
+      main = 'Model 4 Intensity Prediction',
       ylab = 'η',
       xlab = 'Epidemic Day')
  
@@ -1012,6 +1393,30 @@ summary(result2)
 
 ```{r}
 summary(result3)
+
+# effect of first intervention is stronger than that of the stay at home order in terms of flattening curve
+# ideally cases should decrease after second intervention however they stay at a constant rate/number hence the position beta se estsimate for saho
+# in fact this timeline overlaps with the reopen date/end of saho.....this is what is possibly (?) masking the effect of the saho such that the intensity appears to increase but actually this increas is due to the reopening
+```
+
+```{r}
+summary(result3_weibull)
+
+# effect of first intervention is stronger than that of the stay at home order in terms of flattening curve
+# ideally cases should decrease after second intervention however they stay at a constant rate/number hence the position beta se estsimate for saho
+# in fact this timeline overlaps with the reopen date/end of saho.....this is what is possibly (?) masking the effect of the saho such that the intensity appears to increase but actually this increas is due to the reopening
+```
+
+```{r}
+summary(result3_weibull_basic)
+
+# effect of first intervention is stronger than that of the stay at home order in terms of flattening curve
+# ideally cases should decrease after second intervention however they stay at a constant rate/number hence the position beta se estsimate for saho
+# in fact this timeline overlaps with the reopen date/end of saho.....this is what is possibly (?) masking the effect of the saho such that the intensity appears to increase but actually this increas is due to the reopening
+```
+
+```{r}
+summary(result3_exp_basic)
 
 # effect of first intervention is stronger than that of the stay at home order in terms of flattening curve
 # ideally cases should decrease after second intervention however they stay at a constant rate/number hence the position beta se estsimate for saho
@@ -1114,12 +1519,6 @@ simulations6_weibull <- epidemic.simulations(result6_weibull, replicates = 50)
 
 ```
 
-```{r}
-plotPosteriorPredictive_interventions(simulations6_weibull, "Model 6 (Weibull Distribution): Posterior Predictive Distribution")
-plotPosteriorPredictive_interventions(result6_weibull, "Model 6 (Weibull Distribution): Posterior Distribution")
-
-# two interventions and time basis of 4
-```
 
 ```{r}
 summary(result6_weibull)
@@ -1192,12 +1591,6 @@ simulations6_exp_basic <- epidemic.simulations(result6_exp_basic, replicates = 5
 
 ```
 
-```{r}
-plotPosteriorPredictive_interventions(simulations6_exp_basic, "Model 6 (Basic ABC): Posterior Predictive Distribution")
-plotPosteriorPredictive_interventions(result6_exp_basic, "Model 6 (Basic ABC): Posterior Distribution")
-
-# two interventions and time basis of 4
-```
 
 ```{r}
 summary(result6_exp_basic)
@@ -1232,10 +1625,43 @@ simulations6_weibull_basic <- epidemic.simulations(result6_weibull_basic, replic
 ```
 
 ```{r}
-plotPosteriorPredictive_interventions(simulations6_weibull_basic, "Model 6 (Weibull, Basic ABC): Posterior Predictive Distribution")
-plotPosteriorPredictive_interventions(result6_weibull_basic, "Model 6 (Weibull, Basic ABC): Posterior Distribution")
+plotPosteriorPredictive_compare_t2(simulations6,simulations6_weibull,simulations6_exp_basic,simulations6_weibull_basic,"Posterior Predictive Distribution: Model 6")
+plotPosteriorPredictive_compare_t2(result6,result6_weibull,result6_exp_basic,result6_weibull_basic,"Posterior Distribution: Model 6")
+```
 
-# two interventions and time basis of 4
+```{r}
+
+beta_idx_m6_expSMC <- grepl("Beta_SE", colnames(result6$param.samples)) # use to get beta estimates/samples
+eta_m6_expSMC <- exposure_model_6$X %*% t(result6$param.samples[,beta_idx_m6_expSMC]) # get intensity matrix/time series (X(se) x Beta(se))
+
+beta_idx_m6_weiSMC <- grepl("Beta_SE", colnames(result6_weibull$param.samples)) # use to get beta estimates/samples
+eta_m6_weiSMC  <- exposure_model_6$X %*% t(result6_weibull$param.samples[,beta_idx_m6_weiSMC]) # get intensity matrix/time series (X(se) x Beta(se))
+
+beta_idx_m6_expbasic <- grepl("Beta_SE", colnames(result6_exp_basic$param.samples)) # use to get beta estimates/samples
+eta_m6_expbasic  <- exposure_model_6$X %*% t(result6_exp_basic$param.samples[,beta_idx_m6_expbasic]) # get intensity matrix/time series (X(se) x Beta(se))
+
+beta_idx_m6_weibasic  <- grepl("Beta_SE", colnames(result6_weibull_basic$param.samples)) # use to get beta estimates/samples
+eta_m6_weibasic   <- exposure_model_6$X %*% t(result6_weibull_basic$param.samples[,beta_idx_m6_weibasic]) # get intensity matrix/time series (X(se) x Beta(se))
+
+
+ 
+ plot(apply(eta_m6_expSMC, 1, mean), 
+      type = 'l', 
+      col = "blue",
+      main = 'Model 6 Intensity Prediction',
+      ylab = 'η',
+      xlab = 'Epidemic Day')
+ lines(apply(eta_m6_weiSMC, 1, mean), lty = 1, col = "red")
+ lines(apply(eta_m6_expbasic, 1, mean), lty = 1, col = "chartreuse2")
+ lines(apply(eta_m6_weibasic, 1, mean), lty = 1, col = "darkgoldenrod1")
+ 
+ legend("bottomleft", legend = c("Exponential (SMC)", "Weibull (SMC)",
+                               "Exponential (Basic)", "Weibull (Basic)"), 
+         lty = c(1,1,1,1), col = c("blue", "red", "chartreuse2", "darkgoldenrod1"))
+
+ 
+ # drives the I_star compartment...there is some lag between rising intensity and actual cases as we account for latent period!
+ # in the absence of splines, model assumes constant baseline intensity until intervention date afterwhich there is exponential decay...with splines (aids in improving estimation) we see that the starting intensity decreases and then increases sometime around implementation of the saho...meaning that there may be other factors not included in the model which are impacting intensity
 ```
 
 ```{r}
@@ -1260,9 +1686,9 @@ get_coverage_weibull(simulations6_weibull_basic,weibull_beta_infectious,"infecti
 28. Finally get runtimes for all models
 
 ```{r}
-timeMatrix = rbind(runtime1,runtime2, runtime3, runtime4, runtime5, runtime6, runtime7, runtime8, runtime9, runtime10, runtime11,
+timeMatrix = rbind(runtime1,runtime2, runtime3, runtime3_weibull, runtime3_exp_basic, runtime3_weibull_basic, runtime4, runtime5, runtime6, runtime7, runtime8, runtime9, runtime10, runtime11,
                    runtime12, runtime13, runtime14, runtime15, runtime6_weibull, runtime6_exp_basic, runtime6_weibull_basic)
-rownames(timeMatrix) = paste("model", 1:18)
+rownames(timeMatrix) = paste("model", 1:21)
 print(timeMatrix[,1:3])
 # use in table with number of parameters and also number of timepoints
 ```
