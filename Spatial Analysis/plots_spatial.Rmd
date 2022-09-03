@@ -3,6 +3,9 @@ title: "Spatial Analysis Results"
 output: pdf_document
 date: '2022-08-25'
 ---
+
+Associated RData file (spatial_results.RData) can be downloaded at: https://mega.nz/folder/yBpA0IpA#jUZw1qrXeGQioN3bImE-Wg  
+
 ## Models 1a-1c: 77 timepoints
 
 * Model 1: Baseline intensity (assumed different) for each location plus two linear time components, beginning on respective intervention dates (school closure and state mandated stay-at-home-order)
@@ -25,11 +28,9 @@ a-c: Same as above
 
  \setlength{\leftskip}{0cm}
 
-## Models 3-4: 153 fitted timepoints, 297 missing/predicted timepoints (total: 450 timepoints)
+## Model 3: 153 fitted timepoints, 297 missing/predicted timepoints (total: 450 timepoints)
 
-* Model 3: Baseline intensity (assumed different) for each location, a temporal basis splines of 3 degrees of freedom, the proportion of population vaccinated (at least one vaccine shot) and proportion fully vaccinated (all doses prescribed by the initial vaccination protocol) as recorded on 01/06/2021
-
-* Model 4: Baseline intensity (assumed different) for each location, a temporal trigonometric term, the proportion of population vaccinated (at least one vaccine shot) and proportion fully vaccinated (all doses prescribed by the initial vaccination protocol) as recorded on 01/06/2021
+* Model 3: Baseline intensity (assumed different) for each location, a temporal trigonometric term, the proportion of population vaccinated (at least one vaccine shot) and proportion fully vaccinated (all doses prescribed by the initial vaccination protocol) as recorded on 01/06/2021
 
 
 ```{r setup, include=FALSE}
@@ -42,7 +43,7 @@ library(forestmangr)
 ```
 
 ```{r}
-load("./spatial_results.RData")
+load("./results.RData")
 ```
 
 
@@ -73,6 +74,16 @@ plotPosteriorPredictive_firstwave(simulations1c, "Model 1c: Posterior Predictive
 ```
 
 ```{r}
+plotPosteriorPredictive_compare_dm(result1a,result1b, result1c, "Model 1a vs Model 1b vs Model 1c: Posterior Distribution")
+plotPosteriorPredictive_compare_dm(simulations1a,simulations1b, simulations1c, "Model 1a vs Model 1b vs Model 1c: Posterior Predictive Distribution")
+```
+
+```{r}
+plotPosteriorPredictive_compare_t1_alg(result1a,result1a_weibull,result1a_basic,result1a_basic_wei, "Model 1a: Posterior Distribution")
+plotPosteriorPredictive_compare_t1_alg(simulations1a,simulations1a_weibull,simulations1a_basic,simulations1a_basic_wei, "Model 1a: Posterior Predictive Distribution")
+```
+
+```{r}
 plotPosteriorPredictive_firstandsecondwave(result2a, "Model 2a: Posterior Distribution")
 plotPosteriorPredictive_firstandsecondwave(simulations2a, "Model 2a: Posterior Predictive Distribution")
 ```
@@ -95,6 +106,11 @@ plotPosteriorPredictive_firstandsecondwave(simulations2a_weibull_basic,"Model 2a
 ```
 
 ```{r}
+plotPosteriorPredictive_compare_t2_alg(result2a,result2a_weibull,result2a_basic,result2a_weibull_basic, "Model 2a: Posterior Distribution")
+plotPosteriorPredictive_compare_t2_alg(simulations2a,simulations2a_weibull,simulations2a_basic,simulations2a_weibull_basic, "Model 2a: Posterior Predictive Distribution")
+```
+
+```{r}
 plotPosteriorPredictive_firstandsecondwave(result2b, "Model 2b: Posterior Distribution")
 plotPosteriorPredictive_firstandsecondwave(simulations2b, "Model 2b: Posterior Predictive Distribution")
 ```
@@ -105,103 +121,168 @@ plotPosteriorPredictive_firstandsecondwave(simulations2c, "Model 2c: Posterior P
 ```
 
 ```{r}
-plotPosteriorPredictive(result3, vaccines_dates[-4], "Model 3: Posterior Distribution", lastTpt)
-plotPosteriorPredictive(simulations3, vaccines_dates[-4], "Model 3: Posterior Predictive Distribution", lastTpt)
+plotPosteriorPredictive(result4, vaccines_dates[-4], "Model 3: Posterior Distribution", lastTpt)
+plotPosteriorPredictive(simulations4, vaccines_dates[-4], "Model 3: Posterior Predictive Distribution", lastTpt)
 ```
 
 ```{r}
-plotPosteriorPredictive(result4, vaccines_dates[-4], "Model 4: Posterior Distribution", lastTpt)
-plotPosteriorPredictive(simulations4, vaccines_dates[-4], "Model 4: Posterior Predictive Distribution", lastTpt)
+plotPosteriorPredictive(result6, vaccines_dates[-4], "Model 3 (Weibull Distribution): Posterior Distribution", lastTpt)
+plotPosteriorPredictive(simulations6, vaccines_dates[-4], "Model 3 (Weibull Distribution): Posterior Predictive Distribution", lastTpt)
 ```
 
 ```{r}
-plotPosteriorPredictive(result5, vaccines_dates[-4], "Model 3 (Weibull Distribution): Posterior Distribution", lastTpt)
-plotPosteriorPredictive(simulations5, vaccines_dates[-4], "Model 3 (Weibull Distribution): Posterior Predictive Distribution", lastTpt)
-```
-
-```{r}
-plotPosteriorPredictive(result6, vaccines_dates[-4], "Model 4 (Weibull Distribution): Posterior Distribution", lastTpt)
-plotPosteriorPredictive(simulations6, vaccines_dates[-4], "Model 4 (Weibull Distribution): Posterior Predictive Distribution", lastTpt)
+plotPosteriorPredictive_compare(result4,result6, vaccines_dates[-4], "Model 3: Posterior Distribution", lastTpt)
+plotPosteriorPredictive_compare(simulations4,simulations6, vaccines_dates[-4], "Model 3: Posterior Predictive Distribution", lastTpt)
 ```
 
 
 
 ```{r}
-beta_idx <- grepl("Beta_SE", colnames(result1a$param.samples)) # use to get beta estimates/samples
-eta <- exposure_model_1$X %*% t(result1a$param.samples[,beta_idx]) # get intensity matrix/time series (X(se) x Beta(se))
+beta_idx_1a <- grepl("Beta_SE", colnames(result1a$param.samples)) # use to get beta estimates/samples
+eta_1a <- exposure_model_1$X %*% t(result1a$param.samples[,beta_idx_1a]) # get intensity matrix/time series (X(se) x Beta(se))
 # dim: [T x p] * [n x p]^t where T = timepoints, n = no of samples and p = no of parameters
 # after matrix multiplication: eta (intensity matrix) is T x n 
+
+beta_idx_1b <- grepl("Beta_SE", colnames(result1b$param.samples)) # use to get beta estimates/samples
+eta_1b <- exposure_model_1$X %*% t(result1b$param.samples[,beta_idx_1b]) # get intensity matrix/time series (X(se) x Beta(se))
+
+beta_idx_1c <- grepl("Beta_SE", colnames(result1c$param.samples)) # use to get beta estimates/samples
+eta_1c <- exposure_model_1$X %*% t(result1c$param.samples[,beta_idx_1c]) # get intensity matrix/time series (X(se) x Beta(se))
  
- plot(apply(eta, 1, mean), 
+ plot(apply(eta_1a, 1, mean), 
       type = 'l', 
+      col="blue",
+      main = 'Intensity Prediction',
+      ylab = 'Intensity (Eta)',
+      xlab = 'Epidemic Day',
+      ylim = c(-10, max(eta_1a,eta_1b,eta_1c)*1.5))
+ lines(apply(eta_1b, 1, mean), lty = 1, col = "red")
+ lines(apply(eta_1c, 1, mean), lty = 1, col = "chartreuse2")
+ abline(v=c(76,152), lty=c(2,2), lwd=c(2, 2), col="black")
+
+ 
+ legend("bottomleft", legend = c("Model 1a", "Model 1b",
+                               "Model 1c"), 
+         lty = c(1,1,1), col = c("blue", "red", "chartreuse2"))
+
+
+ 
+ # drives the I_star compartment
+ # alabama has least epidemic intensity (which is true considering the amount of cases compared to fl and georgia), followed by florida and georgia
+```
+
+
+
+```{r}
+beta_idx_1a_exp_SMC  <- grepl("Beta_SE", colnames(result1a$param.samples)) # use to get beta estimates/samples
+eta_1a_exp_SMC<- exposure_model_1$X %*% t(result1a$param.samples[,beta_idx_1a_exp_SMC]) # get intensity matrix/time series (X(se) x Beta(se))
+
+beta_idx_1a_wei_SMC  <- grepl("Beta_SE", colnames(result1a_weibull$param.samples)) # use to get beta estimates/samples
+eta_1a_wei_SMC<- exposure_model_1$X %*% t(result1a_weibull$param.samples[,beta_idx_1a_wei_SMC]) # get intensity matrix/time series (X(se) x Beta(se))
+
+beta_idx_1a_exp_basic  <- grepl("Beta_SE", colnames(result1a_basic$param.samples)) # use to get beta estimates/samples
+eta_1a_exp_basic <- exposure_model_1$X %*% t(result1a_basic$param.samples[,beta_idx_1a_exp_basic]) # get intensity matrix/time series (X(se) x Beta(se))
+
+beta_idx_1a_wei_basic  <- grepl("Beta_SE", colnames(result1a_basic_wei$param.samples)) # use to get beta estimates/samples
+eta_1a_wei_basic <- exposure_model_1$X %*% t(result1a_basic_wei$param.samples[,beta_idx_1a_wei_basic]) # get intensity matrix/time series (X(se) x Beta(se))
+ 
+ plot(apply(eta_1a_exp_SMC, 1, mean), 
+      type = 'l', 
+      col="blue",
       main = 'Model 1a Intensity Prediction',
       ylab = 'Intensity (Eta)',
-      xlab = 'Epidemic Day')
+      xlab = 'Epidemic Day',
+      ylim = c(-13, max(eta_1a_exp_SMC,eta_1a_wei_SMC,eta_1a_exp_basic,eta_1a_wei_basic)*1.5))
+ lines(apply(eta_1a_wei_SMC, 1, mean), lty = 1, col = "red")
+ lines(apply(eta_1a_exp_basic, 1, mean), lty = 1, col = "chartreuse2")
+ lines(apply(eta_1a_wei_basic, 1, mean), lty = 1, col = "darkgoldenrod1")
+ abline(v=c(77,153), lty=c(2,2), lwd=c(2, 2), col="black")
+
  
- # drives the I_star compartment
- # alabama has least epidemic intensity (which is true considering the amount of cases compared to fl and georgia), followed by florida and georgia
+ 
+ 
+ legend("bottomleft", legend = c("Exponential (SMC)", "Weibull (SMC)",
+                               "Exponential (Basic)", "Weibull (Basic)"), 
+         lty = c(1,1,1,1), col = c("blue", "red", "chartreuse2", "darkgoldenrod1"))
+
+
+# alabama has least epidemic intensity (which is true considering the amount of cases compared to fl and georgia), followed by florida and georgia
 ```
 
 ```{r}
-beta_idx_1 <- grepl("Beta_SE", colnames(result2a$param.samples)) # use to get beta estimates/samples
-eta_1 <- exposure_model_2$X %*% t(result2a$param.samples[,beta_idx_1]) # get intensity matrix/time series (X(se) x Beta(se))
+beta_idx_2a_exp_SMC  <- grepl("Beta_SE", colnames(result2a$param.samples)) # use to get beta estimates/samples
+eta_2a_exp_SMC<- exposure_model_2$X %*% t(result2a$param.samples[,beta_idx_2a_exp_SMC]) # get intensity matrix/time series (X(se) x Beta(se))
+
+beta_idx_2a_wei_SMC  <- grepl("Beta_SE", colnames(result2a_weibull$param.samples)) # use to get beta estimates/samples
+eta_2a_wei_SMC<- exposure_model_2$X %*% t(result2a_weibull$param.samples[,beta_idx_2a_wei_SMC]) # get intensity matrix/time series (X(se) x Beta(se))
+
+beta_idx_2a_exp_basic  <- grepl("Beta_SE", colnames(result2a_basic$param.samples)) # use to get beta estimates/samples
+eta_2a_exp_basic <- exposure_model_2$X %*% t(result2a_basic$param.samples[,beta_idx_2a_exp_basic]) # get intensity matrix/time series (X(se) x Beta(se))
+
+beta_idx_2a_wei_basic  <- grepl("Beta_SE", colnames(result2a_weibull_basic$param.samples)) # use to get beta estimates/samples
+eta_2a_wei_basic <- exposure_model_2$X %*% t(result2a_weibull_basic$param.samples[,beta_idx_2a_wei_basic]) # get intensity matrix/time series (X(se) x Beta(se))
  
- plot(apply(eta_1, 1, mean), 
+ plot(apply(eta_2a_exp_SMC, 1, mean), 
       type = 'l', 
+      col="blue",
       main = 'Model 2a Intensity Prediction',
       ylab = 'Intensity (Eta)',
-      xlab = 'Epidemic Day')
+      xlab = 'Epidemic Day',
+      ylim = c(-15, max(eta_2a_exp_SMC,eta_2a_wei_SMC,eta_2a_exp_basic,eta_2a_wei_basic)*1.5))
+ lines(apply(eta_2a_wei_SMC, 1, mean), lty = 1, col = "red")
+ lines(apply(eta_2a_exp_basic, 1, mean), lty = 1, col = "chartreuse2")
+ lines(apply(eta_2a_wei_basic, 1, mean), lty = 1, col = "darkgoldenrod1")
+ abline(v=c(184,368), lty=c(2,2), lwd=c(2, 2), col="black")
+
  
- # drives the I_star compartment
- # alabama has least epidemic intensity (which is true considering the amount of cases compared to fl and georgia), followed by florida and georgia
+ 
+ 
+ legend("bottomleft", legend = c("Exponential (SMC)", "Weibull (SMC)",
+                               "Exponential (Basic)", "Weibull (Basic)"), 
+         lty = c(1,1,1,1), col = c("blue", "red", "chartreuse2", "darkgoldenrod1"))
+
+
+# alabama has least epidemic intensity (which is true considering the amount of cases compared to fl and georgia), followed by florida and georgia
 ```
 
 ```{r}
-beta_idx_2 <- grepl("Beta_SE", colnames(result2a_weibull$param.samples)) # use to get beta estimates/samples
-eta_2 <- exposure_model_2$X %*% t(result2a_weibull$param.samples[,beta_idx_2]) # get intensity matrix/time series (X(se) x Beta(se))
+beta_idx_3_exp  <- grepl("Beta_SE", colnames(result4$param.samples)) # use to get beta estimates/samples
+eta_3_exp <- exposure_model_4$X %*% t(result4$param.samples[,beta_idx_3_exp]) # get intensity matrix/time series (X(se) x Beta(se))
+
+beta_idx_3_wei <- grepl("Beta_SE", colnames(result6$param.samples)) # use to get beta estimates/samples
+eta_3_wei <- exposure_model_4$X %*% t(result6$param.samples[,beta_idx_3_wei]) # get intensity matrix/time series (X(se) x Beta(se))
+
  
- plot(apply(eta_2, 1, mean), 
+ plot(apply(eta_3_exp, 1, mean), 
       type = 'l', 
-      main = 'Model 2a (Weibull) Intensity Prediction',
+      col="blue",
+      main = 'Model 3 Intensity Prediction',
       ylab = 'Intensity (Eta)',
-      xlab = 'Epidemic Day')
+      xlab = 'Epidemic Day',
+      ylim = c(-15, 7))
+ lines(apply(eta_3_wei, 1, mean), lty = 1, col = "chartreuse2")
+ abline(v=c(450,900), lty=c(2,2), lwd=c(2, 2), col="black")
+
  
- # drives the I_star compartment
- # alabama has least epidemic intensity (which is true considering the amount of cases compared to fl and georgia), followed by florida and georgia
+ 
+ 
+ legend("bottomleft", legend = c("Exponential (SMC)", "Weibull (SMC)"), 
+         lty = c(1,1), col = c("blue", "chartreuse2"))
+
+
+# alabama has least epidemic intensity (which is true considering the amount of cases compared to fl and georgia), followed by florida and georgia
 ```
 
-```{r}
-beta_idx_3 <- grepl("Beta_SE", colnames(result4$param.samples)) # use to get beta estimates/samples
-eta_3 <- exposure_model_4$X %*% t(result4$param.samples[,beta_idx_3]) # get intensity matrix/time series (X(se) x Beta(se))
- 
- plot(apply(eta_3, 1, mean), 
-      type = 'l', 
-      main = 'Model 4 (Exponential Distribution) Intensity Prediction',
-      ylab = 'Intensity (Eta)',
-      xlab = 'Epidemic Day')
- 
- # drives the I_star compartment
- # alabama has least epidemic intensity (which is true considering the amount of cases compared to fl and georgia), followed by florida and georgia
-```
-
-```{r}
-beta_idx_4 <- grepl("Beta_SE", colnames(result6$param.samples)) # use to get beta estimates/samples
-eta_4 <- exposure_model_4$X %*% t(result6$param.samples[,beta_idx_4]) # get intensity matrix/time series (X(se) x Beta(se))
- 
- plot(apply(eta_4, 1, mean), 
-      type = 'l', 
-      main = 'Model 4 (Weibull Distribution) Intensity Prediction',
-      ylab = 'Intensity (Eta)',
-      xlab = 'Epidemic Day')
- 
- # drives the I_star compartment
- # alabama has least epidemic intensity (which is true considering the amount of cases compared to fl and georgia), followed by florida and georgia
-```
-
-# Model 1a
+# Model 1a (Exp)
 
 ```{r}
 summary(result1a)
+```
+
+# Model 1a (Weibull)
+
+```{r}
+summary(result1a_weibull)
 ```
 
 # Model 2a
@@ -216,13 +297,13 @@ summary(result2b)
 summary(result2a_weibull)
 ```
 
-# Model 4 (Exponential)
+# Model 3 (Exponential)
 
 ```{r}
 summary(result4)
 ```
 
-# Model 4 (Weibull)
+# Model 3 (Weibull)
 
 ```{r}
 summary(result6)
@@ -257,80 +338,10 @@ print(comps_3)
 # weibull better
 ```
 
-
-# Coverage, width and bias for model 1a with exponential distribution, SMC-ABC (latent and infectious period estimates)
-
-```{r}
-get_coverage_ei(simulations1a, exp_transition_priors$p_ei) # underestimates
-```
-
-```{r}
-get_coverage_ir(simulations1a, exp_transition_priors$p_ir) # slightly overestimates
-```
-
-# Coverage, width and bias for model 2a with exponential distribution, SMC-ABC (latent and infectious period estimates)
-
-```{r}
-get_coverage_ei(simulations2a, exp_transition_priors$p_ei) # overestimates
-```
-
-```{r}
-get_coverage_ir(simulations2a, exp_transition_priors$p_ir) # overestimates
-```
-
-# Coverage, width and bias for model 2a with Weibull distribution, SMC-ABC (latent and infectious period estimates (shape and scale))
-
-```{r}
-get_coverage_weibull(simulations2a_weibull,weibull_alpha_latent,"latent_shape") # overestimates
-```
-
-```{r}
-get_coverage_weibull(simulations2a_weibull,weibull_beta_latent,"latent_scale") # slightly overestimates
-```
-
-```{r}
-get_coverage_weibull(simulations2a_weibull,weibull_alpha_infectious,"infectious_shape") # greatly overestimates
-```
-
-```{r}
-get_coverage_weibull(simulations2a_weibull,weibull_beta_infectious,"infectious_scale") # underestimates
-```
-
-# Coverage, width and bias for model 4 with exponential distribution, SMC-ABC (latent and infectious period estimates)
-
-```{r}
-get_coverage_ei(simulations4, exp_transition_priors$p_ei) # overestimates
-```
-
-```{r}
-get_coverage_ir(simulations4, exp_transition_priors$p_ir) # overestimates
-```
-
-# Coverage, width and bias for model 4 with Weibull distribution, SMC-ABC (latent and infectious period estimates (shape and scale))
-
-```{r}
-get_coverage_weibull(simulations6,weibull_alpha_latent,"latent_shape") # overestimates
-```
-
-```{r}
-get_coverage_weibull(simulations6,weibull_beta_latent,"latent_scale") # slightly overestimates
-```
-
-```{r}
-get_coverage_weibull(simulations6,weibull_alpha_infectious,"infectious_shape") # greatly overestimates
-```
-
-```{r}
-get_coverage_weibull(simulations6,weibull_beta_infectious,"infectious_scale") # underestimates
-```
-
 # Runtimes
 
 ```{r}
-timeMatrix = rbind(runtime1a, runtime1a_basic, runtime1a_weibull, runtime1b, runtime1c, 
-                   runtime2a, runtime2a_basic, runtime2a_weibull_basic, runtime2a_weibull, runtime2b, runtime2c, 
-                   runtime3, runtime4, runtime5, runtime6)
-rownames(timeMatrix) = paste("model", 1:15)
+
 print(timeMatrix[,1:3])
 
 # save data with best results...clear workspace and rerun for runtimes...delete everything besides time matrix and load it into the saved workspace
