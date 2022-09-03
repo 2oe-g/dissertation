@@ -37,7 +37,7 @@ a-c: Same as above
 knitr::opts_chunk$set(echo = FALSE)
 ```
 
-```{r}
+```{r, warning=FALSE, results='hide',message=FALSE}
 library(ABSEIR)
 library(forestmangr)
 ```
