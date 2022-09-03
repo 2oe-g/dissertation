@@ -363,7 +363,7 @@ vaccines_timeline_sub <- cbind(
 
 vaccines_dates <- vaccines_timeline_sub %>%
     mutate(date=vaccinations_alabama$date) %>%
-  filter(date >= "2021-06-01" & date <="2022-03-01") # filter by this date as this is when boosters first administered and data becomes more sparse around this time (also marks two years since first case)
+  filter(date >= "2021-06-01") # filter by this date as this is when boosters first administered and data becomes more sparse around this time (also marks two years since first case)
 ```
 
 5. Use filtered data for respective data models
@@ -435,7 +435,7 @@ time_invariant_covariates <- data.frame(intercepts = diag(3))[rep(1:n.locations,
 
   
 
-# scale alabama by larger value as it has less cases compared to florida and georgia...prevents epidemic from dying out by fixing intensity to acceptable scale
+# scale alabama by larger value as it has less cases compared to florida and georgia...prevents epidemic from dying out by fixing intensity to acceptable scale (since intensity is estimated linearly)
 # show difference in scaled vs unscaled?
 X_al <- cbind(cumsum(first_wave_confirmed_sub_with_date$date >= first_intervention_date_al)/500,# 400?...399 (500 og)
              cumsum(first_wave_confirmed_sub_with_date$date >= second_intervention_date_al)/500) 
@@ -560,7 +560,8 @@ gravity_distance_model <- DistanceModel(list(gravity_model),
 
 pickWeibullPars <- function(qdf){
   rslt <- optim(par = c(1,1), fn = function(par){
-    sum((qweibull(p = qdf$q, shape = par[1], scale = par[2]) - qdf$x)^2)
+    sum((qweibull(p = qdf$q, shape = par[1], scale = par[2]) - qdf$x)^2) # estimates the parameters of weibull distribution given its 
+                                                                            # (0.025 and 0.975) quantiles...squared difference
   })
   rslt$par
 }
@@ -572,11 +573,13 @@ pickGammaHyperPars <- function(mean, ESS){
 }
 # below values using researched studies
 latent_par_means <- pickWeibullPars(qdf=data.frame(q=c(0.025,0.5,0.975), #(95% CI) 
-                                                   x=c(2,5,12)))   
+                                                   x=c(2,5,12)))   #picks means of shape and scale of latent period
 # latent period: approximately 2-12 days with median 5 (mean ~ 6 days)
+# 95% LB = 2.188560, UB = 6.521399
 infectious_par_means <- pickWeibullPars(qdf = data.frame(q=c(0.025,0.5,0.975),
-                                                         x = c(8,13,22))) 
+                                                         x = c(8,13,22)))  #picks means of shape and scale infectious period
 # infectious period: approximately 10-24 days with median 14 (mean ~ 16 days)
+# 95% LB = 4.412692, UB = 15.835367
 
 weibull_transition_priors <- WeibullTransitionPriors(latent_shape_prior_alpha = pickGammaHyperPars(latent_par_means[1], 1000)[1],
                                             latent_shape_prior_beta = pickGammaHyperPars(latent_par_means[1], 1000)[2],
@@ -595,6 +598,7 @@ weibull_transition_priors <- WeibullTransitionPriors(latent_shape_prior_alpha = 
 ```
 
 ```{r}
+# https://github.com/grantbrown/ABSEIR/blob/master/R/transitionPriors.R
 
 weibull_alpha_latent = qgamma(0.1, weibull_transition_priors$latent_shape_prior_alpha,
                         weibull_transition_priors$latent_shape_prior_beta) #minEIShape
@@ -652,7 +656,7 @@ sampling_control_basic = SamplingControl(seed = 123123,
                                     n_cores = 14,
                                     algorithm="BasicABC",
                                    list(batch_size = 2000,
-                                        init_batch_size = 500000,
+                                        init_batch_size = 100000,
                                          epochs = 1e6,
                                          max_batches = 250,
                                          acceptance_fraction = 0.001,
@@ -763,7 +767,7 @@ print(comps)
 comps_1 <- compareModels(modelList = list(result2a, result2b, result2c), n_samples = 1000)
 rownames(comps_1) <- colnames(comps_1) <- c("Distance", "CAR", "Gravity")
 print(comps_1)
-# rm comp_2waves
+
 ```
 
 
@@ -817,6 +821,226 @@ plotPosteriorPredictive_firstwave <- function(simulations, nm){
     plotLocation(i, nm)
   }
 }
+```
+
+```{r}
+plotPosteriorPredictive_compare_dm = function(m1a, m1b, m1c, nm)  
+{
+  Is_m1a <- lapply(m1a$simulationResults, function(x){x$I_star})
+  Is_m1a <- array(Reduce(c, Is_m1a), dim = c(nrow(Is_m1a[[1]]),
+                                           ncol(Is_m1a[[2]]),
+                                           length(Is_m1a)))
+  
+  Ism_m1a <- apply(Is_m1a, 1:2, mean)
+  Islb_m1a <- apply(Is_m1a, 1:2, quantile, probs = c(0.025))
+  Isub_m1a <- apply(Is_m1a, 1:2, quantile, probs = c(0.975))
+  
+  Is_m1b <- lapply(m1b$simulationResults, function(x){x$I_star})
+  Is_m1b <- array(Reduce(c, Is_m1b), dim = c(nrow(Is_m1b[[1]]),
+                                           ncol(Is_m1b[[2]]),
+                                           length(Is_m1b)))
+  
+  Ism_m1b <- apply(Is_m1b, 1:2, mean)
+  Islb_m1b <- apply(Is_m1b, 1:2, quantile, probs = c(0.025))
+  Isub_m1b <- apply(Is_m1b, 1:2, quantile, probs = c(0.975))
+  
+  Is_m1c <- lapply(m1c$simulationResults, function(x){x$I_star})
+  Is_m1c <- array(Reduce(c, Is_m1c), dim = c(nrow(Is_m1c[[1]]),
+                                           ncol(Is_m1c[[2]]),
+                                           length(Is_m1c)))
+  
+  Ism_m1c <- apply(Is_m1c, 1:2, mean)
+  Islb_m1c <- apply(Is_m1c, 1:2, quantile, probs = c(0.025))
+  Isub_m1c <- apply(Is_m1c, 1:2, quantile, probs = c(0.975))
+  
+  plotLocation <- function(x, model){
+    plot(first_wave_confirmed_sub[,x], ylim = c(0, max(Ism_m1a[,x], Ism_m1b[,x], Ism_m1c[,x])*1.75), xlab = "Epidemic Day", ylab = "New Cases",
+         main = paste(model, "\n location ", 
+                      colnames(spatial_sub)[x], sep = ""))
+    lines(Ism_m1a[,x], lty = 1, col = "blue")
+    lines(Islb_m1a[,x], lty = 2, col = "blue")
+    lines(Isub_m1a[,x], lty = 2, col = "blue")
+    
+    lines(Ism_m1b[,x], lty = 1, col = "red")
+    lines(Islb_m1b[,x], lty = 2, col = "red")
+    lines(Isub_m1b[,x], lty = 2, col = "red")
+    
+    lines(Ism_m1c[,x], lty = 1, col = "chartreuse2")
+    lines(Islb_m1c[,x], lty = 2, col = "chartreuse2")
+    lines(Isub_m1c[,x], lty = 2, col = "chartreuse2")
+    
+    legend("topleft", legend = c("Mean", "95% CI", "Observed", "Model 1a", "Model 1b",
+                               "Model 1c"), 
+         lty = c(1,2,0,1,1,1), 
+         pch = c(NA,NA,1,NA,NA,NA), col = c("black", "black", "black", "blue", "red", "chartreuse2"), cex = 1)
+  }
+  
+  for (i in 1:ncol(spatial_sub)){
+    plotLocation(i, nm)
+  }
+}
+```
+
+```{r}
+plotPosteriorPredictive_compare_t1_alg = function(simulations_exp_SMC, simulations_wei_SMC, 
+                                                  simulations_exp_basic, simulations_wei_basic, nm)  
+{
+  
+  Is_exp_SMC <- lapply(simulations_exp_SMC$simulationResults, function(x){x$I_star})
+  Is_exp_SMC <- array(Reduce(c, Is_exp_SMC), dim = c(nrow(Is_exp_SMC[[1]]),
+                                           ncol(Is_exp_SMC[[2]]),
+                                           length(Is_exp_SMC)))
+  
+  Ism_exp_SMC <- apply(Is_exp_SMC, 1:2, mean)
+  Islb_exp_SMC <- apply(Is_exp_SMC, 1:2, quantile, probs = c(0.025))
+  Isub_exp_SMC <- apply(Is_exp_SMC, 1:2, quantile, probs = c(0.975))
+  
+  
+  Is_wei_SMC <- lapply(simulations_wei_SMC$simulationResults, function(x){x$I_star})
+  Is_wei_SMC <- array(Reduce(c, Is_wei_SMC), dim = c(nrow(Is_wei_SMC[[1]]),
+                                           ncol(Is_wei_SMC[[2]]),
+                                           length(Is_wei_SMC)))
+  
+  Ism_wei_SMC <- apply(Is_wei_SMC, 1:2, mean)
+  Islb_wei_SMC <- apply(Is_wei_SMC, 1:2, quantile, probs = c(0.025))
+  Isub_wei_SMC <- apply(Is_wei_SMC, 1:2, quantile, probs = c(0.975))
+  
+  
+  Is_exp_basic <- lapply(simulations_exp_basic$simulationResults, function(x){x$I_star})
+  Is_exp_basic <- array(Reduce(c, Is_exp_basic), dim = c(nrow(Is_exp_basic[[1]]),
+                                           ncol(Is_exp_basic[[2]]),
+                                           length(Is_exp_basic)))
+  
+  Ism_exp_basic <- apply(Is_exp_basic, 1:2, mean)
+  Islb_exp_basic <- apply(Is_exp_basic, 1:2, quantile, probs = c(0.025))
+  Isub_exp_basic <- apply(Is_exp_basic, 1:2, quantile, probs = c(0.975))
+  
+  
+  Is_wei_basic <- lapply(simulations_wei_basic$simulationResults, function(x){x$I_star})
+  Is_wei_basic <- array(Reduce(c, Is_wei_basic), dim = c(nrow(Is_wei_basic[[1]]),
+                                           ncol(Is_wei_basic[[2]]),
+                                           length(Is_wei_basic)))
+  
+  Ism_wei_basic <- apply(Is_wei_basic, 1:2, mean)
+  Islb_wei_basic <- apply(Is_wei_basic, 1:2, quantile, probs = c(0.025))
+  Isub_wei_basic <- apply(Is_wei_basic, 1:2, quantile, probs = c(0.975))
+  
+   
+  
+  plotLocation <- function(x, model){
+    plot(first_wave_confirmed_sub[,x], ylim = c(0, max(first_wave_confirmed_sub[,x])*1.5),
+         xlab = "Epidemic Day", ylab = "New Cases",
+         main = paste(model, "\n location ", 
+                      colnames(spatial_sub)[x], sep = ""))
+    lines(Ism_exp_SMC[,x], lty = 1, col = "blue")
+    lines(Islb_exp_SMC[,x], lty = 2, col = "blue")
+    lines(Isub_exp_SMC[,x], lty = 2, col = "blue")
+    
+    lines(Ism_wei_SMC[,x], lty = 1, col = "red")
+    lines(Islb_wei_SMC[,x], lty = 2, col = "red")
+    lines(Isub_wei_SMC[,x], lty = 2, col = "red")
+    
+    lines(Ism_exp_basic[,x], lty = 1, col = "chartreuse2")
+    lines(Islb_exp_basic[,x], lty = 2, col = "chartreuse2")
+    lines(Isub_exp_basic[,x], lty = 2, col = "chartreuse2")
+    
+    lines(Ism_wei_basic[,x], lty = 1, col = "darkgoldenrod1")
+    lines(Islb_wei_basic[,x], lty = 2, col = "darkgoldenrod1")
+    lines(Isub_wei_basic[,x], lty = 2, col = "darkgoldenrod1")
+    
+    legend("topleft", legend = c("Mean", "95% CI", "Observed", "Exponential (SMC)", "Weibull (SMC)",
+                               "Exponential (Basic)", "Weibull (Basic)"), 
+         lty = c(1,2,0,1,1,1,1), 
+         pch = c(NA,NA,1,NA,NA,NA,NA), col = c("black", "black", "black", "blue", "red", "chartreuse2", "darkgoldenrod1"), cex = 1)
+  }
+  
+  for (i in 1:ncol(spatial_sub)){
+    plotLocation(i, nm)
+  }
+}
+
+
+```
+
+```{r}
+plotPosteriorPredictive_compare_t2_alg = function(simulations_exp_SMC, simulations_wei_SMC, 
+                                                  simulations_exp_basic, simulations_wei_basic, nm)  
+{
+  
+  Is_exp_SMC <- lapply(simulations_exp_SMC$simulationResults, function(x){x$I_star})
+  Is_exp_SMC <- array(Reduce(c, Is_exp_SMC), dim = c(nrow(Is_exp_SMC[[1]]),
+                                           ncol(Is_exp_SMC[[2]]),
+                                           length(Is_exp_SMC)))
+  
+  Ism_exp_SMC <- apply(Is_exp_SMC, 1:2, mean)
+  Islb_exp_SMC <- apply(Is_exp_SMC, 1:2, quantile, probs = c(0.025))
+  Isub_exp_SMC <- apply(Is_exp_SMC, 1:2, quantile, probs = c(0.975))
+  
+  
+  Is_wei_SMC <- lapply(simulations_wei_SMC$simulationResults, function(x){x$I_star})
+  Is_wei_SMC <- array(Reduce(c, Is_wei_SMC), dim = c(nrow(Is_wei_SMC[[1]]),
+                                           ncol(Is_wei_SMC[[2]]),
+                                           length(Is_wei_SMC)))
+  
+  Ism_wei_SMC <- apply(Is_wei_SMC, 1:2, mean)
+  Islb_wei_SMC <- apply(Is_wei_SMC, 1:2, quantile, probs = c(0.025))
+  Isub_wei_SMC <- apply(Is_wei_SMC, 1:2, quantile, probs = c(0.975))
+  
+  
+  Is_exp_basic <- lapply(simulations_exp_basic$simulationResults, function(x){x$I_star})
+  Is_exp_basic <- array(Reduce(c, Is_exp_basic), dim = c(nrow(Is_exp_basic[[1]]),
+                                           ncol(Is_exp_basic[[2]]),
+                                           length(Is_exp_basic)))
+  
+  Ism_exp_basic <- apply(Is_exp_basic, 1:2, mean)
+  Islb_exp_basic <- apply(Is_exp_basic, 1:2, quantile, probs = c(0.025))
+  Isub_exp_basic <- apply(Is_exp_basic, 1:2, quantile, probs = c(0.975))
+  
+  
+  Is_wei_basic <- lapply(simulations_wei_basic$simulationResults, function(x){x$I_star})
+  Is_wei_basic <- array(Reduce(c, Is_wei_basic), dim = c(nrow(Is_wei_basic[[1]]),
+                                           ncol(Is_wei_basic[[2]]),
+                                           length(Is_wei_basic)))
+  
+  Ism_wei_basic <- apply(Is_wei_basic, 1:2, mean)
+  Islb_wei_basic <- apply(Is_wei_basic, 1:2, quantile, probs = c(0.025))
+  Isub_wei_basic <- apply(Is_wei_basic, 1:2, quantile, probs = c(0.975))
+  
+   
+  
+  plotLocation <- function(x, model){
+    plot(firstandsecond_wave_confirmed_sub[,x], ylim = c(0, max(firstandsecond_wave_confirmed_sub[,x])*1.5),
+         xlab = "Epidemic Day", ylab = "New Cases",
+         main = paste(model, "\n location ", 
+                      colnames(spatial_sub)[x], sep = ""))
+    lines(Ism_exp_SMC[,x], lty = 1, col = "blue")
+    lines(Islb_exp_SMC[,x], lty = 2, col = "blue")
+    lines(Isub_exp_SMC[,x], lty = 2, col = "blue")
+    
+    lines(Ism_wei_SMC[,x], lty = 1, col = "red")
+    lines(Islb_wei_SMC[,x], lty = 2, col = "red")
+    lines(Isub_wei_SMC[,x], lty = 2, col = "red")
+    
+    lines(Ism_exp_basic[,x], lty = 1, col = "chartreuse2")
+    lines(Islb_exp_basic[,x], lty = 2, col = "chartreuse2")
+    lines(Isub_exp_basic[,x], lty = 2, col = "chartreuse2")
+    
+    lines(Ism_wei_basic[,x], lty = 1, col = "darkgoldenrod1")
+    lines(Islb_wei_basic[,x], lty = 2, col = "darkgoldenrod1")
+    lines(Isub_wei_basic[,x], lty = 2, col = "darkgoldenrod1")
+    
+    legend("topleft", legend = c("Mean", "95% CI", "Observed", "Exponential (SMC)", "Weibull (SMC)",
+                               "Exponential (Basic)", "Weibull (Basic)"), 
+         lty = c(1,2,0,1,1,1,1), 
+         pch = c(NA,NA,1,NA,NA,NA,NA), col = c("black", "black", "black", "blue", "red", "chartreuse2", "darkgoldenrod1"), cex = 1)
+  }
+  
+  for (i in 1:ncol(spatial_sub)){
+    plotLocation(i, nm)
+  }
+}
+
+
 ```
 
 ```{r}
@@ -880,38 +1104,49 @@ plotPosteriorPredictive_firstandsecondwave(simulations2b, "Model 2b: Posterior P
 plotPosteriorPredictive_firstandsecondwave(result2c, "Model 2c: Posterior Distribution")
 plotPosteriorPredictive_firstandsecondwave(simulations2c, "Model 2c: Posterior Predictive Distribution")
 ```
+```{r}
+plotPosteriorPredictive_compare_dm(result1a,result1b, result1c, "Model 1a vs Model 1b vs Model 1c: Posterior Distribution")
+plotPosteriorPredictive_compare_dm(simulations1a,simulations1b, simulations1c, "Model 1a vs Model 1b vs Model 1c: Posterior Predictive Distribution")
+```
+
+
 
 20. Plot intensity predictions for best models
 
 ```{r}
-beta_idx <- grepl("Beta_SE", colnames(result1a$param.samples)) # use to get beta estimates/samples
-eta <- exposure_model_1$X %*% t(result1a$param.samples[,beta_idx]) # get intensity matrix/time series (X(se) x Beta(se))
+beta_idx_1a <- grepl("Beta_SE", colnames(result1a$param.samples)) # use to get beta estimates/samples
+eta_1a <- exposure_model_1$X %*% t(result1a$param.samples[,beta_idx_1a]) # get intensity matrix/time series (X(se) x Beta(se))
 # dim: [T x p] * [n x p]^t where T = timepoints, n = no of samples and p = no of parameters
 # after matrix multiplication: eta (intensity matrix) is T x n 
+
+beta_idx_1b <- grepl("Beta_SE", colnames(result1b$param.samples)) # use to get beta estimates/samples
+eta_1b <- exposure_model_1$X %*% t(result1b$param.samples[,beta_idx_1b]) # get intensity matrix/time series (X(se) x Beta(se))
+
+beta_idx_1c <- grepl("Beta_SE", colnames(result1c$param.samples)) # use to get beta estimates/samples
+eta_1c <- exposure_model_1$X %*% t(result1c$param.samples[,beta_idx_1c]) # get intensity matrix/time series (X(se) x Beta(se))
  
- plot(apply(eta, 1, mean), 
+ plot(apply(eta_1a, 1, mean), 
       type = 'l', 
-      main = 'Model 1a Intensity Prediction',
+      col="blue",
+      main = 'Intensity Prediction',
       ylab = 'η',
-      xlab = 'Epidemic Day')
+      xlab = 'Epidemic Day',
+      ylim = c(-10, max(eta_1a,eta_1b,eta_1c)*1.5))
+ lines(apply(eta_1b, 1, mean), lty = 1, col = "red")
+ lines(apply(eta_1c, 1, mean), lty = 1, col = "chartreuse2")
+ abline(v=c(76,152), lty=c(2,2), lwd=c(2, 2), col="black")
+
+ 
+ legend("bottomleft", legend = c("Model 1a", "Model 1b",
+                               "Model 1c"), 
+         lty = c(1,1,1), col = c("blue", "red", "chartreuse2"))
+
+
  
  # drives the I_star compartment
  # alabama has least epidemic intensity (which is true considering the amount of cases compared to fl and georgia), followed by florida and georgia
 ```
 
-```{r}
-beta_idx_1 <- grepl("Beta_SE", colnames(result2a$param.samples)) # use to get beta estimates/samples
-eta_1 <- exposure_model_2$X %*% t(result2a$param.samples[,beta_idx_1]) # get intensity matrix/time series (X(se) x Beta(se))
- 
- plot(apply(eta_1, 1, mean), 
-      type = 'l', 
-      main = 'Model 2a Intensity Prediction',
-      ylab = 'η',
-      xlab = 'Epidemic Day')
- 
- # drives the I_star compartment
- # alabama has least epidemic intensity (which is true considering the amount of cases compared to fl and georgia), followed by florida and georgia
-```
 
 21. Get estimation summaries for best models 
 
@@ -988,19 +1223,6 @@ print(comps_3)
 # weibull better
 ```
 
-```{r}
-beta_idx_2 <- grepl("Beta_SE", colnames(result2a_weibull$param.samples)) # use to get beta estimates/samples
-eta_2 <- exposure_model_2$X %*% t(result2a_weibull$param.samples[,beta_idx_2]) # get intensity matrix/time series (X(se) x Beta(se))
- 
- plot(apply(eta_2, 1, mean), 
-      type = 'l', 
-      main = 'Model 2a (Weibull) Intensity Prediction',
-      ylab = 'η',
-      xlab = 'Epidemic Day')
- 
- # drives the I_star compartment
- # alabama has least epidemic intensity (which is true considering the amount of cases compared to fl and georgia), followed by florida and georgia
-```
 
 23. Use best models to compare basic algorithm to SMC one
 
@@ -1011,6 +1233,16 @@ runtime1a_basic= system.time(result1a_basic <- SpatialSEIRModel(data_model_1,
                                                     distance_model,
                                                    #weibull_transition_priors,
                                                     exp_transition_priors,
+                                                    initial_values,
+                                                    sampling_control_basic,
+                                                    samples = 100,
+                                                    verbose = 2)) 
+runtime1a_basic_wei= system.time(result1a_basic_wei <- SpatialSEIRModel(data_model_1,
+                                                    exposure_model_1,
+                                                    reinfection_model,
+                                                    distance_model,
+                                                   weibull_transition_priors,
+                                                    #exp_transition_priors,
                                                     initial_values,
                                                     sampling_control_basic,
                                                     samples = 100,
@@ -1041,6 +1273,7 @@ runtime2a_weibull_basic= system.time(result2a_weibull_basic <- SpatialSEIRModel(
 ```{r}
 
 simulations1a_basic <- epidemic.simulations(result1a_basic, replicates = 50)
+simulations1a_basic_wei <- epidemic.simulations(result1a_basic_wei, replicates = 50)
 simulations2a_basic <- epidemic.simulations(result2a_basic, replicates = 50)
 simulations2a_weibull_basic <- epidemic.simulations(result2a_weibull_basic, replicates = 50)
 
@@ -1065,6 +1298,91 @@ plotPosteriorPredictive_firstandsecondwave(simulations2a_basic,"Model 2a (Basic 
 plotPosteriorPredictive_firstandsecondwave(result2a_weibull_basic,"Model 2a (Basic ABC, Weibull): Posterior Distribution")
 plotPosteriorPredictive_firstandsecondwave(simulations2a_weibull_basic,"Model 2a (Basic ABC, Weibull): Posterior Predictive Distribution")
 ```
+
+```{r}
+plotPosteriorPredictive_compare_t1_alg(result1a,result1a_weibull,result1a_basic,result1a_basic_wei, "Model 1a: Posterior Distribution")
+plotPosteriorPredictive_compare_t1_alg(simulations1a,simulations1a_weibull,simulations1a_basic,simulations1a_basic_wei, "Model 1a: Posterior Predictive Distribution")
+```
+
+```{r}
+plotPosteriorPredictive_compare_t2_alg(result2a,result2a_weibull,result2a_basic,result2a_weibull_basic, "Model 2a: Posterior Distribution")
+plotPosteriorPredictive_compare_t2_alg(simulations2a,simulations2a_weibull,simulations2a_basic,simulations2a_weibull_basic, "Model 2a: Posterior Predictive Distribution")
+```
+
+
+```{r}
+beta_idx_1a_exp_SMC  <- grepl("Beta_SE", colnames(result1a$param.samples)) # use to get beta estimates/samples
+eta_1a_exp_SMC<- exposure_model_1$X %*% t(result1a$param.samples[,beta_idx_1a_exp_SMC]) # get intensity matrix/time series (X(se) x Beta(se))
+
+beta_idx_1a_wei_SMC  <- grepl("Beta_SE", colnames(result1a_weibull$param.samples)) # use to get beta estimates/samples
+eta_1a_wei_SMC<- exposure_model_1$X %*% t(result1a_weibull$param.samples[,beta_idx_1a_wei_SMC]) # get intensity matrix/time series (X(se) x Beta(se))
+
+beta_idx_1a_exp_basic  <- grepl("Beta_SE", colnames(result1a_basic$param.samples)) # use to get beta estimates/samples
+eta_1a_exp_basic <- exposure_model_1$X %*% t(result1a_basic$param.samples[,beta_idx_1a_exp_basic]) # get intensity matrix/time series (X(se) x Beta(se))
+
+beta_idx_1a_wei_basic  <- grepl("Beta_SE", colnames(result1a_basic_wei$param.samples)) # use to get beta estimates/samples
+eta_1a_wei_basic <- exposure_model_1$X %*% t(result1a_basic_wei$param.samples[,beta_idx_1a_wei_basic]) # get intensity matrix/time series (X(se) x Beta(se))
+ 
+ plot(apply(eta_1a_exp_SMC, 1, mean), 
+      type = 'l', 
+      col="blue",
+      main = 'Model 1a Intensity Prediction',
+      ylab = 'η',
+      xlab = 'Epidemic Day',
+      ylim = c(-13, max(eta_1a_exp_SMC,eta_1a_wei_SMC,eta_1a_exp_basic,eta_1a_wei_basic)*1.5))
+ lines(apply(eta_1a_wei_SMC, 1, mean), lty = 1, col = "red")
+ lines(apply(eta_1a_exp_basic, 1, mean), lty = 1, col = "chartreuse2")
+ lines(apply(eta_1a_wei_basic, 1, mean), lty = 1, col = "darkgoldenrod1")
+ abline(v=c(77,153), lty=c(2,2), lwd=c(2, 2), col="black")
+
+ 
+ 
+ 
+ legend("bottomleft", legend = c("Exponential (SMC)", "Weibull (SMC)",
+                               "Exponential (Basic)", "Weibull (Basic)"), 
+         lty = c(1,1,1,1), col = c("blue", "red", "chartreuse2", "darkgoldenrod1"))
+
+
+# alabama has least epidemic intensity (which is true considering the amount of cases compared to fl and georgia), followed by florida and georgia
+```
+
+```{r}
+beta_idx_2a_exp_SMC  <- grepl("Beta_SE", colnames(result2a$param.samples)) # use to get beta estimates/samples
+eta_2a_exp_SMC<- exposure_model_2$X %*% t(result2a$param.samples[,beta_idx_2a_exp_SMC]) # get intensity matrix/time series (X(se) x Beta(se))
+
+beta_idx_2a_wei_SMC  <- grepl("Beta_SE", colnames(result2a_weibull$param.samples)) # use to get beta estimates/samples
+eta_2a_wei_SMC<- exposure_model_2$X %*% t(result2a_weibull$param.samples[,beta_idx_2a_wei_SMC]) # get intensity matrix/time series (X(se) x Beta(se))
+
+beta_idx_2a_exp_basic  <- grepl("Beta_SE", colnames(result2a_basic$param.samples)) # use to get beta estimates/samples
+eta_2a_exp_basic <- exposure_model_2$X %*% t(result2a_basic$param.samples[,beta_idx_2a_exp_basic]) # get intensity matrix/time series (X(se) x Beta(se))
+
+beta_idx_2a_wei_basic  <- grepl("Beta_SE", colnames(result2a_weibull_basic$param.samples)) # use to get beta estimates/samples
+eta_2a_wei_basic <- exposure_model_2$X %*% t(result2a_weibull_basic$param.samples[,beta_idx_2a_wei_basic]) # get intensity matrix/time series (X(se) x Beta(se))
+ 
+ plot(apply(eta_2a_exp_SMC, 1, mean), 
+      type = 'l', 
+      col="blue",
+      main = 'Model 2a Intensity Prediction',
+      ylab = 'η',
+      xlab = 'Epidemic Day',
+      ylim = c(-15, max(eta_2a_exp_SMC,eta_2a_wei_SMC,eta_2a_exp_basic,eta_2a_wei_basic)*1.5))
+ lines(apply(eta_2a_wei_SMC, 1, mean), lty = 1, col = "red")
+ lines(apply(eta_2a_exp_basic, 1, mean), lty = 1, col = "chartreuse2")
+ lines(apply(eta_2a_wei_basic, 1, mean), lty = 1, col = "darkgoldenrod1")
+ abline(v=c(184,368), lty=c(2,2), lwd=c(2, 2), col="black")
+
+ 
+ 
+ 
+ legend("bottomleft", legend = c("Exponential (SMC)", "Weibull (SMC)",
+                               "Exponential (Basic)", "Weibull (Basic)"), 
+         lty = c(1,1,1,1), col = c("blue", "red", "chartreuse2", "darkgoldenrod1"))
+
+
+# alabama has least epidemic intensity (which is true considering the amount of cases compared to fl and georgia), followed by florida and georgia
+```
+
+
 
 
 
@@ -1106,13 +1424,13 @@ n.timepoints_vaccines <- nrow(vaccines_dates)
 time_basis_vaccines = bs(1:n.timepoints_vaccines, degree = 3)[rep(1:n.timepoints_vaccines, 1),]
 
 filter_vaccines_al <- vaccinations_alabama %>%
-  filter(date >= "2021-06-01" & date <="2022-03-01") %>%
+  filter(date >= "2021-06-01")%>%
   head(.,1)
 filter_vaccines_fl <- vaccinations_florida %>%
-  filter(date >= "2021-06-01" & date <="2022-03-01") %>%
+  filter(date >= "2021-06-01") %>%
   head(.,1)
 filter_vaccines_ge <- vaccinations_georgia %>%
-  filter(date >= "2021-06-01" & date <="2022-03-01") %>%
+  filter(date >= "2021-06-01")%>%
   head(.,1)
 
 vaccines_al <- (data.frame(prop_vaxxed = (filter_vaccines_al$vaxxed/N[1,]),
@@ -1248,33 +1566,6 @@ simulations6 <- epidemic.simulations(result6, replicates = 50)
 ```
 
 
-```{r}
-beta_idx_3 <- grepl("Beta_SE", colnames(result4$param.samples)) # use to get beta estimates/samples
-eta_3 <- exposure_model_4$X %*% t(result4$param.samples[,beta_idx_3]) # get intensity matrix/time series (X(se) x Beta(se))
- 
- plot(apply(eta_3, 1, mean), 
-      type = 'l', 
-      main = 'Model 4 (Exponential Distribution) Intensity Prediction',
-      ylab = 'η',
-      xlab = 'Epidemic Day')
- 
- # drives the I_star compartment
- # alabama has least epidemic intensity (which is true considering the amount of cases compared to fl and georgia), followed by florida and georgia
-```
-
-```{r}
-beta_idx_4 <- grepl("Beta_SE", colnames(result6$param.samples)) # use to get beta estimates/samples
-eta_4 <- exposure_model_4$X %*% t(result6$param.samples[,beta_idx_4]) # get intensity matrix/time series (X(se) x Beta(se))
- 
- plot(apply(eta_4, 1, mean), 
-      type = 'l', 
-      main = 'Model 4 (Weibull Distribution) Intensity Prediction',
-      ylab = 'η',
-      xlab = 'Epidemic Day')
- 
- # drives the I_star compartment
- # alabama has least epidemic intensity (which is true considering the amount of cases compared to fl and georgia), followed by florida and georgia
-```
 
 ```{r}
 summary(result4)
@@ -1318,6 +1609,59 @@ plotPosteriorPredictive = function(simulations, rawData, main, lastTime)
 ```
 
 ```{r}
+plotPosteriorPredictive_compare = function(simulations_exp_SMC, simulations_wei_SMC, rawData, nm, lastTime)  
+{
+  
+  Is_exp_SMC <- lapply(simulations_exp_SMC$simulationResults, function(x){x$I_star})
+  Is_exp_SMC <- array(Reduce(c, Is_exp_SMC), dim = c(nrow(Is_exp_SMC[[1]]),
+                                           ncol(Is_exp_SMC[[2]]),
+                                           length(Is_exp_SMC)))
+  
+  Ism_exp_SMC <- apply(Is_exp_SMC, 1:2, mean)
+  Islb_exp_SMC <- apply(Is_exp_SMC, 1:2, quantile, probs = c(0.025))
+  Isub_exp_SMC <- apply(Is_exp_SMC, 1:2, quantile, probs = c(0.975))
+  
+  
+  Is_wei_SMC <- lapply(simulations_wei_SMC$simulationResults, function(x){x$I_star})
+  Is_wei_SMC <- array(Reduce(c, Is_wei_SMC), dim = c(nrow(Is_wei_SMC[[1]]),
+                                           ncol(Is_wei_SMC[[2]]),
+                                           length(Is_wei_SMC)))
+  
+  Ism_wei_SMC <- apply(Is_wei_SMC, 1:2, mean)
+  Islb_wei_SMC <- apply(Is_wei_SMC, 1:2, quantile, probs = c(0.025))
+  Isub_wei_SMC <- apply(Is_wei_SMC, 1:2, quantile, probs = c(0.975))
+  
+  
+  
+  plotLocation <- function(x, model){
+    plot(rawData[,x], ylim = c(0, max(rawData[,x])*2.5),
+         xlab = "Epidemic Day", ylab = "New Cases",
+         main = paste(model, "\n location ", 
+                      colnames(spatial_sub)[x], sep = ""),
+         col = ifelse(1:length(rawData[,x]) <= lastTime, "black", "red"))
+    lines(Ism_exp_SMC[,x], lty = 1, col = "blue")
+    lines(Islb_exp_SMC[,x], lty = 2, col = "blue")
+    lines(Isub_exp_SMC[,x], lty = 2, col = "blue")
+    
+    lines(Ism_wei_SMC[,x], lty = 1, col = "chartreuse2")
+    lines(Islb_wei_SMC[,x], lty = 2, col = "chartreuse2")
+    lines(Isub_wei_SMC[,x], lty = 2, col = "chartreuse2")
+
+    
+    legend("topleft", legend = c("Mean", "95% CI", "Observed", "Future","Exponential (SMC)", "Weibull (SMC)"), 
+         lty = c(1,2,0,0,1,1), 
+         pch = c(NA,NA,1,1,NA,NA), col = c("black", "black", "black", "red", "blue","chartreuse2"), cex = 1)
+  }
+  
+  for (i in 1:ncol(spatial_sub)){
+    plotLocation(i, nm)
+  }
+}
+
+```
+
+
+```{r}
 plotPosteriorPredictive(result3, vaccines_dates[-4], "Model 3: Posterior Distribution", lastTpt)
 plotPosteriorPredictive(simulations3, vaccines_dates[-4], "Model 3: Posterior Predictive Distribution", lastTpt)
 ```
@@ -1335,6 +1679,41 @@ plotPosteriorPredictive(simulations5, vaccines_dates[-4], "Model 5: Posterior Pr
 plotPosteriorPredictive(result6, vaccines_dates[-4], "Model 6: Posterior Distribution", lastTpt)
 plotPosteriorPredictive(simulations6, vaccines_dates[-4], "Model 6: Posterior Predictive Distribution", lastTpt)
 ```
+
+```{r}
+plotPosteriorPredictive_compare(result4,result6, vaccines_dates[-4], "Model 3: Posterior Distribution", lastTpt)
+plotPosteriorPredictive_compare(simulations4,simulations6, vaccines_dates[-4], "Model 3: Posterior Predictive Distribution", lastTpt)
+```
+
+```{r}
+beta_idx_3_exp  <- grepl("Beta_SE", colnames(result4$param.samples)) # use to get beta estimates/samples
+eta_3_exp <- exposure_model_4$X %*% t(result4$param.samples[,beta_idx_3_exp]) # get intensity matrix/time series (X(se) x Beta(se))
+
+beta_idx_3_wei <- grepl("Beta_SE", colnames(result6$param.samples)) # use to get beta estimates/samples
+eta_3_wei <- exposure_model_4$X %*% t(result6$param.samples[,beta_idx_3_wei]) # get intensity matrix/time series (X(se) x Beta(se))
+
+ 
+ plot(apply(eta_3_exp, 1, mean), 
+      type = 'l', 
+      col="blue",
+      main = 'Model 3 Intensity Prediction',
+      ylab = 'η',
+      xlab = 'Epidemic Day',
+      ylim = c(-15, 7))
+ lines(apply(eta_3_wei, 1, mean), lty = 1, col = "chartreuse2")
+ abline(v=c(450,900), lty=c(2,2), lwd=c(2, 2), col="black")
+
+ 
+ 
+ 
+ legend("bottomleft", legend = c("Exponential (SMC)", "Weibull (SMC)"), 
+         lty = c(1,1), col = c("blue", "chartreuse2"))
+
+
+# alabama has least epidemic intensity (which is true considering the amount of cases compared to fl and georgia), followed by florida and georgia
+```
+
+
 
 25. Get coverage, width and bias estimates for best overall models
 
@@ -1471,13 +1850,14 @@ get_coverage_weibull(simulations6,weibull_beta_infectious,"infectious_scale") # 
 26. Finally get runtimes for all models
 
 ```{r}
-timeMatrix = rbind(runtime1a, runtime1a_basic, runtime1a_weibull, runtime1b, runtime1c, 
-                   runtime2a, runtime2a_basic, runtime2a_weibull_basic, runtime2a_weibull, runtime2b, runtime2c, 
+timeMatrix = rbind(runtime1a, runtime1a_weibull, runtime1a_basic, runtime1a_basic_wei, 
+                   runtime1b, runtime1c, 
+                   runtime2a, runtime2a_weibull, runtime2a_basic, runtime2a_weibull_basic, 
+                   runtime2b, runtime2c, 
                    runtime3, runtime4, runtime5, runtime6)
-rownames(timeMatrix) = paste("model", 1:15)
+rownames(timeMatrix) = paste("model", 1:16)
 print(timeMatrix[,1:3])
 
-# save data with best results...clear workspace and rerun for runtimes...delete everything besides time matrix and load it into the saved workspace
 ```
 
 
