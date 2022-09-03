@@ -43,7 +43,7 @@ library(forestmangr)
 ```
 
 ```{r}
-load("./results.RData")
+load("./spatial_results.RData")
 ```
 
 
