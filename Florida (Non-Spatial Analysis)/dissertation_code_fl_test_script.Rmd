@@ -424,12 +424,12 @@ weibull_alpha_latent = qgamma(0.1, weibull_transition_priors$latent_shape_prior_
 weibull_beta_latent = qgamma(0.9, weibull_transition_priors$latent_scale_prior_alpha,
                         weibull_transition_priors$latent_scale_prior_beta) #maxEIScale
 
-# alpha^inf ~ gamma(shape = 81.5249, rate = 18.4751) which maps probability of latent period shape being between 3.79 and 5.05
+# alpha^inf ~ gamma(shape = 81.5249, rate = 18.4751) which maps probability of infectious period shape being between 3.79 and 5.05
 
 weibull_alpha_infectious = qgamma(0.1, weibull_transition_priors$infectious_shape_prior_alpha,
                         weibull_transition_priors$infectious_shape_prior_beta) #minIRShape
 
-# beta^inf ~ gamma(shape = 94.06012, rate = 5.939876) which maps probability of latent period shape being between 13.78 and 17.96
+# beta^inf ~ gamma(shape = 94.06012, rate = 5.939876) which maps probability of infectious period shape being between 13.78 and 17.96
  
 weibull_beta_infectious = qgamma(0.9, weibull_transition_priors$infectious_scale_prior_alpha,
                         weibull_transition_priors$infectious_scale_prior_beta) #maxIRScale
@@ -1052,6 +1052,41 @@ plotPosteriorPredictive_compare_t1 = function(m1, m2, m3, main)
 ```
 
 ```{r}
+plotPosteriorPredictive_I = function(m1, m2, main)  
+{
+  allSimulatedI_star_m1 = sapply(m1$simulationResults, function(x){x$I})
+  
+  lowerQuantile_m1 = apply(allSimulatedI_star_m1, 1, quantile, probs = c(0.025))
+  posteriorMean_m1 = apply(allSimulatedI_star_m1, 1, mean)
+  upperQuantile_m1 = apply(allSimulatedI_star_m1, 1, quantile, probs = c(0.975))
+  
+  allSimulatedI_star_m2 = sapply(m2$simulationResults, function(x){x$I_star})
+  
+  lowerQuantile_m2= apply(allSimulatedI_star_m2, 1, quantile, probs = c(0.025))
+  posteriorMean_m2 = apply(allSimulatedI_star_m2, 1, mean)
+  upperQuantile_m2 = apply(allSimulatedI_star_m2, 1, quantile, probs = c(0.975))
+  
+  
+  plot(0:nrow(first_wave), ylim = c(0, max(posteriorMean_m1,posteriorMean_m2)),
+       xlab = "Epidemic Day", ylab = "Infected Compartment (I)", main = main, type = "l")
+  
+  lines(upperQuantile_m1, lty = 2, col = "blue")
+  lines(lowerQuantile_m1, lty = 2, col = "blue")
+  lines(posteriorMean_m1, lty = 1, col = "blue")
+  
+  lines(upperQuantile_m2, lty = 2, col = "red")
+  lines(lowerQuantile_m2, lty = 2, col = "red")
+  lines(posteriorMean_m2, lty = 1, col = "red")
+  
+  
+  legend("topleft", legend = c("Mean", "95% CI", "Exponential (SMC)", "Weibull (SMC)"), 
+         lty = c(1,2,1,1), 
+         pch = c(NA,NA,NA,NA), col = c("black", "black", "blue", "red"), cex = 1)
+}
+
+```
+
+```{r}
 plotPosteriorPredictive_compare_t1_alg = function(simulations_exp_SMC, simulations_wei_SMC, 
                                                   simulations_exp_basic, simulations_wei_basic, main)  
 {
@@ -1278,6 +1313,10 @@ plotPosteriorPredictive_compare_t1(result1,result2,result3,"Posterior Distributi
 ```
 
 ```{r}
+plotPosteriorPredictive_I(simulations3, simulations3_weibull, "Posterior Predictive Distribution: Model 3")
+```
+
+```{r}
 plotPosteriorPredictive_compare_t1_alg(simulations3,simulations3_weibull,simulations3_exp_basic,simulations3_weibull_basic,"Posterior Predictive Distribution: Model 3")
 plotPosteriorPredictive_compare_t1_alg(result3,result3_weibull,result3_exp_basic, result3_weibull_basic,"Posterior Distribution: Model 3")
 
@@ -1332,7 +1371,7 @@ eta_m3_wei_SMC <- exposure_model_3$X %*% t(result3_weibull$param.samples[,beta_i
  plot(apply(eta_m3, 1, mean), 
       type = 'l', 
       col="blue",
-      main = 'Intensity Prediction',
+      main = 'Model 3 Intensity Prediction',
       ylab = 'η',
       xlab = 'Epidemic Day',
       ylim = c(min(eta_m3,eta_m3_exp_basic,eta_m3_wei_basic,eta_m3_wei_SMC), max(eta_m3,eta_m3_exp_basic,eta_m3_wei_basic,eta_m3_wei_SMC)*1.5))
@@ -1384,8 +1423,17 @@ eta_m11 <- exposure_model_11$X %*% t(result11$param.samples[,beta_idx_m11]) # ge
 
 ```{r}
 summary(result1)
-
 ```
+
+```{r}
+#allSimulatedI_m1 = sapply(simulations1$simulationResults, function(x){x$I})
+
+#posteriorMean_m1 = apply(allSimulatedI_star, 1, mean)
+
+#posteriorMean[5] .... I5 = 3
+#posteriorMean[70] .... I70 = 1770
+```
+
 
 ```{r}
 summary(result2)
