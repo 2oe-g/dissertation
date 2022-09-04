@@ -154,6 +154,17 @@ plotPosteriorPredictive_compare_t1(result1,result2,result3,"Posterior Distributi
 ```
 
 ```{r}
+plotPosteriorPredictive_compare_t1_alg(simulations3,simulations3_weibull,simulations3_exp_basic,simulations3_weibull_basic,"Posterior Predictive Distribution: Model 3")
+plotPosteriorPredictive_compare_t1_alg(result3,result3_weibull,result3_exp_basic, result3_weibull_basic,"Posterior Distribution: Model 3")
+```
+
+```{r}
+plotPosteriorPredictive_I(simulations3, simulations3_weibull, "Posterior Predictive Distribution: Model 3")
+```
+
+
+
+```{r}
 plotPosteriorPredictive_interventions(simulations4, "Model 4: Posterior Predictive Distribution")
 plotPosteriorPredictive_interventions(result4, "Model 4: Posterior Distribution")
 
@@ -265,14 +276,6 @@ plotPosteriorPredictive_vaccines(result15, "Model 15: Posterior Distribution")
 
 
 ```{r}
-beta_idx_m1 <- grepl("Beta_SE", colnames(result1$param.samples)) # use to get beta estimates/samples
-eta_m1 <- exposure_model_1$X %*% t(result1$param.samples[,beta_idx_m1]) # get intensity matrix/time series (X(se) x Beta(se))
-
-beta_idx_m2 <- grepl("Beta_SE", colnames(result2$param.samples)) # use to get beta estimates/samples
-eta_m2 <- exposure_model_2$X %*% t(result2$param.samples[,beta_idx_m2]) # get intensity matrix/time series (X(se) x Beta(se))
-
-beta_idx_m3 <- grepl("Beta_SE", colnames(result3$param.samples)) # use to get beta estimates/samples
-eta_m3 <- exposure_model_3$X %*% t(result3$param.samples[,beta_idx_m3]) # get intensity matrix/time series (X(se) x Beta(se))
  
  plot(apply(eta_m1, 1, mean), 
       type = 'l', 
@@ -295,19 +298,11 @@ eta_m3 <- exposure_model_3$X %*% t(result3$param.samples[,beta_idx_m3]) # get in
 ```
 
 ```{r}
-beta_idx_m3_exp_basic  <- grepl("Beta_SE", colnames(result3_exp_basic$param.samples)) # use to get beta estimates/samples
-eta_m3_exp_basic <- exposure_model_3$X %*% t(result3_exp_basic$param.samples[,beta_idx_m3_exp_basic]) # get intensity matrix/time series (X(se) x Beta(se))
-
-beta_idx_m3_wei_basic  <- grepl("Beta_SE", colnames(result3_weibull_basic$param.samples)) # use to get beta estimates/samples
-eta_m3_wei_basic <- exposure_model_3$X %*% t(result3_weibull_basic$param.samples[,beta_idx_m3_wei_basic]) # get intensity matrix/time series (X(se) x Beta(se))
-
-beta_idx_m3_wei_SMC <- grepl("Beta_SE", colnames(result3_weibull$param.samples)) # use to get beta estimates/samples
-eta_m3_wei_SMC <- exposure_model_3$X %*% t(result3_weibull$param.samples[,beta_idx_m3_wei_SMC]) # get intensity matrix/time series (X(se) x Beta(se))
  
  plot(apply(eta_m3, 1, mean), 
       type = 'l', 
       col="blue",
-      main = 'Model 6 Intensity Prediction',
+      main = 'Model 3 Intensity Prediction',
       ylab = 'Intensity (Eta)',
       xlab = 'Epidemic Day',
       ylim = c(min(eta_m3,eta_m3_exp_basic,eta_m3_wei_basic,eta_m3_wei_SMC), max(eta_m3,eta_m3_exp_basic,eta_m3_wei_basic,eta_m3_wei_SMC)*1.5))
@@ -328,9 +323,6 @@ eta_m3_wei_SMC <- exposure_model_3$X %*% t(result3_weibull$param.samples[,beta_i
 ```
 
 ```{r}
-
-beta_idx_m4 <- grepl("Beta_SE", colnames(result4$param.samples)) # use to get beta estimates/samples
-eta_m4 <- exposure_model_4$X %*% t(result4$param.samples[,beta_idx_m4]) # get intensity matrix/time series (X(se) x Beta(se))
  
  plot(apply(eta_m4, 1, mean), 
       type = 'l', 
@@ -344,9 +336,6 @@ eta_m4 <- exposure_model_4$X %*% t(result4$param.samples[,beta_idx_m4]) # get in
 
 ```{r}
 
-beta_idx_m11 <- grepl("Beta_SE", colnames(result11$param.samples)) # use to get beta estimates/samples
-eta_m11 <- exposure_model_11$X %*% t(result11$param.samples[,beta_idx_m11]) # get intensity matrix/time series (X(se) x Beta(se))
- 
  plot(apply(eta_m11, 1, mean), 
       type = 'l', 
       main = 'Model 11 Intensity Prediction',
@@ -355,6 +344,23 @@ eta_m11 <- exposure_model_11$X %*% t(result11$param.samples[,beta_idx_m11]) # ge
  
  # drives the I_star compartment
 ```
+
+```{r}
+ plot(apply(eta_m6_expSMC, 1, mean), 
+      type = 'l', 
+      col = "blue",
+      main = 'Model 6 Intensity Prediction',
+      ylab = 'Intensity (Eta)',
+      xlab = 'Epidemic Day')
+ lines(apply(eta_m6_weiSMC, 1, mean), lty = 1, col = "red")
+ lines(apply(eta_m6_expbasic, 1, mean), lty = 1, col = "chartreuse2")
+ lines(apply(eta_m6_weibasic, 1, mean), lty = 1, col = "darkgoldenrod1")
+ 
+ legend("bottomleft", legend = c("Exponential (SMC)", "Weibull (SMC)",
+                               "Exponential (Basic)", "Weibull (Basic)"), 
+         lty = c(1,1,1,1), col = c("blue", "red", "chartreuse2", "darkgoldenrod1"))
+```
+
 
 # Model 1
 
