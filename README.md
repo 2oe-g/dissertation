@@ -5,4 +5,6 @@ Approximate Bayesian Computation (ABC) allows for approximation of the posterior
 
 * Files in the [extras/](extras) directory were used during initial stages of the project for exploratory analysis and familiarisation of the utilised R Package ([ABSEIR](https://github.com/grantbrown/ABSEIR))
 * Files in the Florida (Non-Spatial Analysis) and Spatial Analysis directories contain the final R scripts 
-* The completed dissertation can be found [here](https://github.com/2oe-g/dissertation/blob/d8c8e869a382214c32c98d082c0f1e94a16b6ccf/ZoeGaness_Dissertation.pdf)
+* The complete dissertation can be found [here](https://github.com/2oe-g/dissertation/blob/d8c8e869a382214c32c98d082c0f1e94a16b6ccf/ZoeGaness_Dissertation.pdf)
+
+Grade Awarded: 67% (Merit)
